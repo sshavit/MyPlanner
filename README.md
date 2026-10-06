@@ -3,6 +3,7 @@
 ![SiMinute](assets/timon-logo.png)
 
 **Name:** Simon Shavit
+
 **UMID:** 22515289
 
 SiMinute is a personal coursework planner built with Jac. It helps students
