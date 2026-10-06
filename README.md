@@ -2,8 +2,8 @@
 
 ![SiMinute](assets/timon-logo.png)
 
-**Name:** [Your Name]  
-**UMID:** [Your UMID]
+**Name:** Simon Shavit
+**UMID:** 22515289
 
 SiMinute is a personal coursework planner built with Jac. It helps students
 organize assignments and study work from a web browser, an iPhone app, or the
@@ -17,7 +17,8 @@ persist data between sessions.
 - View dashboard, daily, weekly, and all-task lists.
 - Filter tasks by course, priority, or completion status.
 - Track overdue and upcoming work.
-- Generate optional AI-assisted study steps for an assignment.
+
+SiMinute uses one shared Jac backend to keep planning data synchronized across all four interfaces. The server handles authentication, task persistence, filtering, daily and weekly views, completion status, and optional AI-generated study steps. The web frontend provides the complete planning experience for creating and organizing assignments, while the mobile app makes it convenient to check or update tasks from an iPhone. The CLI supports quick actions such as adding an assignment, viewing today’s work, and marking tasks complete from a terminal. What makes SiMinute impressive is that all three clients work with the same account and data, so a task added on one platform is immediately available on the others. It combines a practical student-focused workflow with persistent storage, multiple access points, and an optional AI study coach.
 
 ## Prerequisites
 
