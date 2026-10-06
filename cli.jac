@@ -20,7 +20,7 @@ def auth_request(base: str, username: str, password: str) -> str {
 }
 
 async def main -> int {
-    parser = argparse.ArgumentParser(description="Daymark: your student planner in a terminal.");
+    parser = argparse.ArgumentParser(description="Simon's Scheduler: your student planner in a terminal.");
     parser.add_argument("--url", `default=os.environ.get("PLANNER_URL", "http://127.0.0.1:8000"));
     parser.add_argument("command", choices=["login", "logout", "add", "today", "upcoming", "all", "complete"]);
     parser.add_argument("value", nargs="?", `default="", help="Username, task title, or task ID");
@@ -75,6 +75,6 @@ async def main -> int {
             }
         }
         return 0;
-    } except Exception as e { print("Daymark: " + str(e), file=sys.stderr); return 1; }
+    } except Exception as e { print("Simon's Scheduler: " + str(e), file=sys.stderr); return 1; }
 }
 with entry:__main__ { sys.`exit(asyncio.run(main())); }

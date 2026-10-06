@@ -1,4 +1,6 @@
-# Daymark — student planner
+# Simon's Scheduler — student planner
+
+![Simon's Scheduler SS logo](assets/ss-logo.svg)
 
 A personal coursework planner for EECS 449, built from `jac create mysocial --awetiny` with Jac **0.37.23**. Web, React Native mobile, and CLI clients share one Jac planning service and the same account data.
 
@@ -74,7 +76,7 @@ jac run --dev --platform ios mobile
 
 First run provisions the Expo project in `.jac/mobile-rn/`, compiles Jac into native React Native modules, and starts Metro. Wait for **React Native dev ready** and Metro readiness. The first iOS bundle can take around two minutes. In an interactive terminal, use the displayed Expo Go QR code with the iPhone Camera. Alternatively open `exp://192.168.1.100:8081` on the phone (substitute your address).
 
-Inside Daymark, enter **`http://192.168.1.100:8000`** as the **Server address**, select **Connect**, and sign in with your web account. Use port **8000**, the shared planner fleet, even if the mobile command prints another API port. Add or complete a task on the phone, then select **Refresh** in web to see it.
+Inside Simon's Scheduler, enter **`http://192.168.1.100:8000`** as the **Server address**, select **Connect**, and sign in with your web account. Use port **8000**, the shared planner fleet, even if the mobile command prints another API port. Add or complete a task on the phone, then select **Refresh** in web to see it.
 
 **WSL networking:** before scanning the QR, open `http://YOUR_COMPUTER_IP:8000` in iPhone Safari and `http://YOUR_COMPUTER_IP:8081/status` (should return `packager-status:running`). If unreachable, configure Windows/WSL mirrored networking or forward those ports from Windows to WSL and allow them through the firewall. The WSL address printed automatically may not be reachable from a phone. Both the Expo server and the planner backend must be reachable; tunneling Metro alone does not expose the planner backend.
 
@@ -123,7 +125,7 @@ The default is `gpt-4o-mini`. `BYLLM_DEFAULT_MODEL` selects another byLLM-suppor
 | `core/feed.jac` | Jac planning service: profile checks, Task graph nodes, CRUD, views, AI |
 | `cli.jac` | Argument parser and authenticated typed service bridge |
 | `core/feed.test.jac` | Persistence, isolation, validation, view boundaries, AI tests |
-| `desktop.jac` | Retained optional desktop host, now showing Daymark |
+| `desktop.jac` | Retained optional desktop host, now showing Simon's Scheduler |
 | `core/scoring.jac` | Retained original Awetiny scoring service/example |
 
 The original Awetiny service name **feed** is retained, so clients use `/api/feed`. Public bridge endpoints explicitly verify the authenticated profile before any read/write of personal tasks. Tasks connect to the caller’s **private `root`**, never `root.shared`; another account cannot view or mutate them even with a known task ID. Anonymous list requests return an empty planner.
