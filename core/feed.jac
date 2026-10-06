@@ -8,21 +8,38 @@ import from jaclang.runtime.runtime { JacRuntime }
 
 node Profile { has username: str; }
 
+obj GroupView {
+    has id: str, name: str, kind: str, color: str;
+}
+
+obj PlannerClock {
+    has today: str, now: str;
+}
+
+node PlannerGroup {
+    has name: str, kind: str, color: str;
+    def view -> GroupView {
+        return GroupView(id=jid(self), name=self.name, kind=self.kind, color=self.color);
+    }
+}
+
 obj TaskView {
     has id: str, title: str, course: str, due: str, priority: str, notes: str,
-        completed: bool = False, series_id: str = "", repeat: str = "";
+        completed: bool = False, series_id: str = "", repeat: str = "",
+        start: str = "", end: str = "";
 }
 node Task {
     has title: str, course: str, due: str, priority: str, notes: str,
-        completed: bool = False, series_id: str = "", repeat: str = "";
+        completed: bool = False, series_id: str = "", repeat: str = "",
+        start: str = "", end: str = "";
     def view -> TaskView {
         return TaskView(id=jid(self), title=self.title, course=self.course,
             due=self.due, priority=self.priority, notes=self.notes, completed=self.completed,
-            series_id=self.series_id, repeat=self.repeat);
+            series_id=self.series_id, repeat=self.repeat, start=self.start, end=self.end);
     }
 }
 obj Planner {
-    has tasks: list[TaskView] = [], courses: list[str] = [], days: list[str] = [],
+    has tasks: list[TaskView] = [], courses: list[str] = [], groups: list[GroupView] = [], days: list[str] = [],
         viewer: str = "", today: str = "", selected: str = "", now: str = "",
         overdue: int = 0, upcoming: int = 0, completed: int = 0, total: int = 0;
 }
@@ -55,11 +72,37 @@ def:pub join(username: str) -> str {
     return name;
 }
 
-def validate(title: str, course: str, due: str, priority: str, notes: str) -> None {
+def:pub planner_clock -> PlannerClock {
+    current = clock();
+    return PlannerClock(today=current.date().isoformat(), now=current.strftime("%Y-%m-%dT%H:%M"));
+}
+
+def:pub save_group(name: str, kind: str, color: str) -> str {
+    me();
+    clean_name = name.strip();
+    if not clean_name or len(clean_name) > 60 {
+        raise ValueError("Group name must contain 1–60 characters.");
+    }
+    if kind not in ["course", "club"] {
+        raise ValueError("Choose course or club.");
+    }
+    if color not in ["#8B5CF6", "#3B82F6", "#14B8A6", "#F59E0B", "#F43F5E", "#06B6D4", "#F97316", "#84CC16"] {
+        raise ValueError("Choose one of the available group colors.");
+    }
+    groups = [g for g in [root-->[?:PlannerGroup]] if g.name == clean_name];
+    if groups {
+        groups[0].kind = kind; groups[0].color = color;
+        return jid(groups[0]);
+    }
+    group = root ++> PlannerGroup(name=clean_name, kind=kind, color=color);
+    return jid(group);
+}
+
+def validate(title: str, course: str, due: str, priority: str, notes: str, course_optional: bool = False) -> None {
     if not title.strip() or len(title.strip()) > 160 {
         raise ValueError("Title must contain 1–160 characters.");
     }
-    if not course.strip() or len(course.strip()) > 60 {
+    if (not course_optional and not course.strip()) or len(course.strip()) > 60 {
         raise ValueError("Course must contain 1–60 characters.");
     }
     if priority not in ["low", "medium", "high"] {
@@ -91,11 +134,96 @@ def:pub save_task(title: str, course: str, due: str, priority: str = "medium",
         task = owned(task_id);
         task.title = title.strip(); task.course = course.strip(); task.due = due;
         task.priority = priority; task.notes = notes.strip();
+        task.start = ""; task.end = "";
         return jid(task);
     }
     task = root ++> Task(title=title.strip(), course=course.strip(), due=due,
         priority=priority, notes=notes.strip());
     return jid(task);
+}
+
+def:pub save_event(title: str, course: str, start: str, end: str,
+    notes: str = "", event_id: str = "") -> str {
+    me();
+    validate(title, course, start, "medium", notes, course_optional=True);
+    validate(title, course, end, "medium", notes, course_optional=True);
+    if end <= start { raise ValueError("Event end must be after its start."); }
+    if event_id {
+        event = owned(event_id);
+        event.title = title.strip(); event.course = course.strip();
+        event.due = start; event.start = start; event.end = end;
+        event.priority = "medium"; event.notes = notes.strip();
+        return jid(event);
+    }
+    event = root ++> Task(title=title.strip(), course=course.strip(), due=start,
+        start=start, end=end, priority="medium", notes=notes.strip());
+    return jid(event);
+}
+
+def:pub create_recurring_event(title: str, course: str, start: str, end: str,
+    notes: str = "", repeat: str = "weekly", occurrences: int = 8) -> list[str] {
+    me();
+    validate(title, course, start, "medium", notes, course_optional=True);
+    validate(title, course, end, "medium", notes, course_optional=True);
+    if end <= start { raise ValueError("Event end must be after its start."); }
+    if repeat not in ["daily", "weekly", "monthly"] {
+        raise ValueError("Repeat must be daily, weekly, or monthly.");
+    }
+    if occurrences < 2 or occurrences > 52 {
+        raise ValueError("Choose 2–52 occurrences.");
+    }
+    first_start = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M");
+    duration = datetime.datetime.strptime(end, "%Y-%m-%dT%H:%M") - first_start;
+    ids: list[str] = [];
+    series_id = "";
+    for index in range(occurrences) {
+        if repeat == "monthly" {
+            month_index = first_start.year * 12 + first_start.month - 1 + index;
+            year = month_index // 12;
+            month = month_index % 12 + 1;
+            date = min(first_start.day, calendar.monthrange(year, month)[1]);
+            occurrence_start = first_start.replace(year=year, month=month, day=date);
+        } else {
+            occurrence_start = first_start + datetime.timedelta(days=index * (7 if repeat == "weekly" else 1));
+        }
+        occurrence_end = occurrence_start + duration;
+        start_value = occurrence_start.strftime("%Y-%m-%dT%H:%M");
+        end_value = occurrence_end.strftime("%Y-%m-%dT%H:%M");
+        event = root ++> Task(title=title.strip(), course=course.strip(), due=start_value,
+            start=start_value, end=end_value, priority="medium", notes=notes.strip(),
+            series_id=series_id, repeat=repeat);
+        if not series_id {
+            series_id = jid(event);
+            event.series_id = series_id;
+        }
+        ids.append(jid(event));
+    }
+    return ids;
+}
+
+def:pub update_event_series(event_id: str, title: str, course: str, start: str,
+    end: str, notes: str = "") -> int {
+    selected = owned(event_id);
+    if not selected.series_id or not selected.start {
+        raise ValueError("This event is not recurring.");
+    }
+    validate(title, course, start, "medium", notes, course_optional=True);
+    validate(title, course, end, "medium", notes, course_optional=True);
+    if end <= start { raise ValueError("Event end must be after its start."); }
+    old_start = selected.start;
+    delta = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M") - datetime.datetime.strptime(old_start, "%Y-%m-%dT%H:%M");
+    duration = datetime.datetime.strptime(end, "%Y-%m-%dT%H:%M") - datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M");
+    future = [event for event in [root-->[?:Task]] if event.series_id == selected.series_id and event.start and event.start >= old_start];
+    for event in future {
+        occurrence_start = datetime.datetime.strptime(event.start, "%Y-%m-%dT%H:%M") + delta;
+        occurrence_end = occurrence_start + duration;
+        event.start = occurrence_start.strftime("%Y-%m-%dT%H:%M");
+        event.end = occurrence_end.strftime("%Y-%m-%dT%H:%M");
+        event.due = event.start;
+        event.title = title.strip(); event.course = course.strip(); event.notes = notes.strip();
+        event.priority = "medium";
+    }
+    return len(future);
 }
 
 def:pub create_recurring(title: str, course: str, due: str, priority: str = "medium",
@@ -192,12 +320,19 @@ def:pub load_planner(mode: str = "dashboard", day: str = "", course: str = "",
     if jid(root) == jid(root.shared) { return result; }
     result.viewer = me().username;
     tasks = [t.view() for t in [root-->[?:Task]]];
+    result.groups = [g.view() for g in [root-->[?:PlannerGroup]]];
+    group_names = {g.name for g in result.groups};
+    for course_name in sorted({t.course for t in tasks if t.course}) {
+        if course_name not in group_names {
+            result.groups.append(GroupView(id="", name=course_name, kind="course", color="#8B93A7"));
+        }
+    }
     result.total = len(tasks);
     result.completed = sum(1 for t in tasks if t.completed);
-    result.overdue = sum(1 for t in tasks if not t.completed and t.due < result.now);
+    result.overdue = sum(1 for t in tasks if not t.start and not t.completed and t.due < result.now);
     horizon = (today + datetime.timedelta(days=7)).isoformat();
-    result.upcoming = sum(1 for t in tasks if not t.completed and t.due >= result.now and t.due[:10] < horizon);
-    result.courses = sorted({t.course for t in tasks});
+    result.upcoming = sum(1 for t in tasks if not t.start and not t.completed and t.due >= result.now and t.due[:10] < horizon);
+    result.courses = sorted({t.course for t in tasks if t.course});
     start = selected - datetime.timedelta(days=selected.weekday()) if mode == "week" else selected;
     if mode == "calendar" {
         first = selected.replace(day=1);
@@ -208,7 +343,8 @@ def:pub load_planner(mode: str = "dashboard", day: str = "", course: str = "",
         if course and t.course != course { continue; }
         if priority and t.priority != priority { continue; }
         if status == "open" and t.completed or status == "completed" and not t.completed { continue; }
-        if mode in ["day", "week", "calendar"] and t.due[:10] not in result.days { continue; }
+        item_day = t.start[:10] if t.start else t.due[:10];
+        if mode in ["day", "week", "calendar"] and item_day not in result.days { continue; }
         if mode == "upcoming" and (t.due < result.now or t.due[:10] >= horizon) { continue; }
         if mode == "overdue" and (t.completed or t.due >= result.now) { continue; }
         if mode == "dashboard" and t.due[:10] >= horizon { continue; }

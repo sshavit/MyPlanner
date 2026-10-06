@@ -5,8 +5,10 @@ import from "@jac/mobui" {
     Pressable,
     ScrollView,
     Modal,
+    Image,
     useWindowDimensions
 }
+import from "react" { useEffect }
 import from "@jac/runtime" {
     jacSetToken,
     __getApiBaseUrl,
@@ -15,8 +17,10 @@ import from "@jac/runtime" {
     __getLocalStorage,
     __setLocalStorage
 }
-import from core.feed { Planner, TaskView, Breakdown, join, save_task, create_recurring, update_series, complete_task, delete_task, delete_series, load_planner, break_down, accept_steps }
+import from core.feed { Planner, TaskView, Breakdown, join, save_task, save_event, save_group, create_recurring, create_recurring_event, update_series, update_event_series, complete_task, delete_task, delete_series, load_planner, planner_clock, break_down, accept_steps }
 import from core.theme { S, C, SD, CD }
+import from core.date_controls { TimePicker, DateInput }
+import from core.time_slot { TimeSlot }
 
 def Button(
     label: str, action: Callable, quiet: bool = False, disabled: bool = False,
@@ -62,49 +66,6 @@ def CheckRow(label: str, checked: bool, action: Callable, dark: bool = False) ->
         </View>
         <Text style={T.name}>{label}</Text>
     </Pressable>;
-}
-
-def TimePicker(value: str, change: Callable, dark: bool = False) -> JsxElement {
-    T = SD if dark else S;
-    P = CD if dark else C;
-    date = value[:10] if len(value) >= 10 else "2026-01-01";
-    hour24 = int(value[11:13]) if len(value) >= 13 else 12;
-    hour12 = hour24 % 12 if hour24 % 12 else 12;
-    minute = value[14:16] if len(value) >= 16 else "00";
-    period = "AM" if hour24 < 12 else "PM";
-    hours = [str(h) for h in range(1, 13)];
-    minutes = [f"{m:02d}" for m in range(0, 60, 5)];
-    def setTime(nextHour: str = str(hour12), nextMinute: str = minute, nextPeriod: str = period) {
-        h12 = int(nextHour);
-        h24 = h12 % 12 + (12 if nextPeriod == "PM" else 0);
-        change(date + "T" + f"{h24:02d}" + ":" + nextMinute[:2]);
-    }
-    return <View style={{"gap": 6}}>
-        <Text style={T.name}>Due date and time</Text>
-        <input aria-label="Due date" type="date" value={date} onChange={lambda (e: ChangeEvent) { change((e.target.value as str) + "T" + f"{hour24:02d}" + ":" + minute[:2]); }}
-            style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}/>
-        <View style={T.row}>
-            <View style={{"flex": 1, "gap": 6}}>
-                <Text style={T.name}>Hour</Text>
-                <select aria-label="Due hour" value={str(hour12)} onChange={lambda (e: ChangeEvent) { setTime(e.target.value as str); }} style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}>
-                    {for h in hours { <option key={h} value={h}>{h}</option> }}
-                </select>
-            </View>
-            <View style={{"flex": 1, "gap": 6}}>
-                <Text style={T.name}>Minute</Text>
-                <select aria-label="Due minute" value={minute} onChange={lambda (e: ChangeEvent) { setTime(str(hour12), e.target.value as str); }} style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}>
-                    {for m in minutes { <option key={m} value={m}>{m}</option> }}
-                    <option value="59">59</option>
-                </select>
-            </View>
-            <View style={{"flex": 1, "gap": 6}}>
-                <Text style={T.name}>AM / PM</Text>
-                <select aria-label="Due AM or PM" value={period} onChange={lambda (e: ChangeEvent) { setTime(str(hour12), minute, e.target.value as str); }} style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}>
-                    <option value="AM">AM</option><option value="PM">PM</option>
-                </select>
-            </View>
-        </View>
-    </View>;
 }
 
 def monthLabel(day: str) -> str {
@@ -159,14 +120,29 @@ def calendarDays(day: str) -> list[str] {
     return result;
 }
 
-def:pub PlannerApp(remote: bool = False) -> JsxElement {
+def weekdayIndex(day: str) -> int {
+    if len(day) < 10 { return 0; }
+    year = int(day[:4]);
+    month = int(day[5:7]);
+    number = int(day[8:10]);
+    offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    weekdayYear = year - 1 if month < 3 else year;
+    return (weekdayYear + weekdayYear // 4 - weekdayYear // 100 + weekdayYear // 400 + offsets[month - 1] + number) % 7;
+}
+
+def calendarDayFor(task: TaskView) -> str {
+    return task.start[:10] if task.start else task.due[:10];
+}
+
+def:pub PlannerApp(remote: bool = False, timePicker: any = TimePicker, dateInput: any = DateInput, timeSlot: any = TimeSlot) -> JsxElement {
     has feed: Planner = Planner(), username: str = "", password: str = "",
         signup: bool = False, logged: bool = False, busy: bool = False,
         loading: bool = True, error: str = "", notice: str = "",
         server: str = "", connected: bool = not remote,
-        mode: str = "calendar", day: str = "", courseFilter: str = "",
+        mode: str = "week", day: str = "", courseFilter: str = "",
         priorityFilter: str = "", status: str = "open",
         title: str = "", course: str = "EECS 449", due: str = "", notes: str = "",
+        itemType: str = "assignment", eventStart: str = "", eventEnd: str = "",
         priority: str = "medium", editing: str = "", deleting: str = "",
         ai: Breakdown = Breakdown(), aiTask: str = "", aiTitle: str = "",
         composerOpen: bool = False, filtersOpen: bool = False,
@@ -174,19 +150,41 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         recurring: bool = False, repeatFrequency: str = "weekly",
         repeatCount: int = 8, editFuture: bool = False,
         jumpOpen: bool = False, jumpDate: str = "",
-        dragStart: int = -1, dragEnd: int = -1,
+        dragStart: int = -1, dragEnd: int = -1, dragDay: str = "",
+        groupName: str = "", groupKind: str = "course", groupColorChoice: str = "#8B5CF6",
+        liveToday: str = "", liveNow: str = "",
         section: str = "assignments", darkMode: bool = False;
-    wide = useWindowDimensions().width >= 1000;
+    Picker = timePicker;
+    CalendarDateInput = dateInput;
+    Slot = timeSlot;
+    windowSize = useWindowDimensions();
+    wide = windowSize.width >= 1000;
+    visibleStartHour = 8;
+    visibleEndHour = 24;
+    slotHeight = max(34, int((windowSize.height - 330) / (visibleEndHour - visibleStartHour))) if wide else 34;
+    clockToday = liveToday if liveToday else feed.today;
+    clockNow = liveNow if liveNow else feed.now;
+    nowHour = int(clockNow[11:13]) if len(clockNow) >= 16 else -1;
+    nowMinuteOffset = int(clockNow[14:16]) * slotHeight // 60 if len(clockNow) >= 16 else 0;
+    weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     T = SD if darkMode else S;
     P = CD if darkMode else C;
+    groupColors = ["#8B5CF6", "#3B82F6", "#14B8A6", "#F59E0B", "#F43F5E", "#06B6D4", "#F97316", "#84CC16"];
     activeFilters = int(courseFilter != "") + int(priorityFilter != "") + int(status != "open");
     visibleTasks = feed.tasks if mode not in ["calendar", "week", "day"] else [];
+
+    def groupColorFor(name: str) -> str {
+        for group in feed.groups {
+            if group.name == name { return group.color; }
+        }
+        return P.accent;
+    }
 
     async def refresh(shift: int = 0) {
         if not connected { loading = False; return; }
         loading = True;
         try {
-            feed = await load_planner(mode, day,
+            feed = await load_planner("all" if mode == "calendar" else mode, day,
                 courseFilter, priorityFilter, status, shift);
             error = "";
             if shift != 0 { day = feed.days[0] if mode == "week" and len(feed.days) == 7 else feed.selected; }
@@ -196,6 +194,21 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
             error = "Could not load planner. Check your connection or sign in again. " + str(e);
         } finally { loading = False; }
     }
+
+    async def syncClock {
+        try {
+            clock = await planner_clock();
+            liveToday = clock.today; liveNow = clock.now;
+        } except Exception { liveToday = feed.today; liveNow = feed.now; }
+    }
+
+    useEffect(lambda {
+        if connected {
+            syncClock();
+            timer = globalThis.setInterval(lambda { syncClock(); }, 30000);
+            return lambda { globalThis.clearInterval(timer); };
+        }
+    }, [connected]);
 
     async def connect {
         if not server.startswith("http://") and not server.startswith("https://") {
@@ -207,7 +220,31 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         jacLogout(); logged = False; connected = True; error = "";
     }
 
+    async def createGroup {
+        if busy { return; }
+        busy = True; error = ""; notice = "";
+        try {
+            await save_group(groupName, groupKind, groupColorChoice);
+            added_name = groupName.strip();
+            groupName = "";
+            notice = groupKind.title() + " added: " + added_name + ". Choose it when adding an assignment.";
+            await refresh();
+        } except Exception as e { error = str(e); }
+        finally { busy = False; }
+    }
+
+    async def recolorGroup(name: str, kind: str, color: str) {
+        if busy { return; }
+        busy = True; error = "";
+        try {
+            await save_group(name, kind, color);
+            await refresh();
+        } except Exception as e { error = str(e); }
+        finally { busy = False; }
+    }
+
     can with entry {
+        if wide { mode = "week"; }
         logged = jacIsLoggedIn();
         darkMode = __getLocalStorage("daymark_dark_mode") == "true";
         username = __getLocalStorage("planner_username") or "";
@@ -269,17 +306,22 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
     def resetForm {
         editing = ""; title = ""; notes = ""; priority = "medium";
         due = feed.today + "T12:00";
+        itemType = "assignment"; eventStart = feed.today + "T12:00"; eventEnd = feed.today + "T13:00";
         recurring = False; repeatFrequency = "weekly"; repeatCount = 8;
         editFuture = False; editorPane = "main";
     }
     def openComposer {
         resetForm();
         if mode == "day" and feed.selected { due = feed.selected + "T12:00"; }
+        if mode == "day" and feed.selected { eventStart = feed.selected + "T12:00"; eventEnd = feed.selected + "T13:00"; }
         error = ""; composerOpen = True;
     }
     def edit(task: TaskView) {
         editing = task.id; title = task.title; course = task.course;
         due = task.due; notes = task.notes; priority = task.priority;
+        itemType = "event" if task.start else "assignment";
+        eventStart = task.start if task.start else task.due;
+        eventEnd = task.end if task.end else task.due;
         recurring = bool(task.series_id); repeatFrequency = task.repeat;
         editFuture = False; editorPane = "main";
         error = ""; composerOpen = True;
@@ -294,7 +336,15 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         busy = True; error = ""; notice = "";
         try {
             if kind == "save" {
-                if editing and editFuture {
+                if itemType == "event" {
+                    if editing and recurring and editFuture {
+                        await update_event_series(editing, title, course, eventStart, eventEnd, notes);
+                    } elif recurring and not editing {
+                        await create_recurring_event(title, course, eventStart, eventEnd, notes, repeatFrequency, repeatCount);
+                    } else {
+                        await save_event(title, course, eventStart, eventEnd, notes, editing);
+                    }
+                } elif editing and editFuture {
                     await update_series(editing, title, course, due, priority, notes);
                 } elif editing {
                     await save_task(title, course, due, priority, notes, editing);
@@ -303,7 +353,9 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                 } else {
                     await save_task(title, course, due, priority, notes);
                 }
-                notice = "Future dates updated." if editing and editFuture else
+                notice = "Future event dates updated." if itemType == "event" and editing and editFuture else
+                    str(repeatCount) + " repeating events added." if itemType == "event" and recurring and not editing else
+                    "Event saved." if itemType == "event" else "Future dates updated." if editing and editFuture else
                     str(repeatCount) + " repeating dates added." if recurring and not editing else
                     "Assignment saved.";
                 resetForm(); composerOpen = False;
@@ -340,7 +392,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
     }
     def navigate(shift: int) {
         if mode == "calendar" {
-            day = shiftMonth(feed.selected if feed.selected else feed.today, shift);
+            day = shiftMonth(feed.selected if feed.selected else clockToday, shift);
         } else {
             day = feed.days[0] if mode == "week" and len(feed.days) == 7 else feed.selected;
             refresh(shift * (7 if mode == "week" else 1));
@@ -352,35 +404,34 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
             jumpOpen = False;
         }
     }
-    def pickCalendarTime(hour: int) {
-        h24 = hour % 12 + (12 if hour >= 12 else 0);
-        date = feed.selected if feed.selected else feed.today;
-        due = date + "T" + f"{h24:02d}" + ":00";
-        title = ""; course = "EECS 449"; notes = ""; priority = "medium";
+    def pickCalendarTime(startHour: int, endHour: int, date: str = "") {
+        date = date if date else feed.selected if feed.selected else clockToday;
+        startValue = date + "T" + f"{startHour:02d}" + ":00";
+        endValue = date + "T" + f"{endHour:02d}" + ":00" if endHour < 24 else date + "T23:59";
+        itemType = "event"; eventStart = startValue; eventEnd = endValue;
+        due = startValue;
+        title = ""; course = ""; notes = ""; priority = "medium";
         recurring = False; editing = ""; editorPane = "main";
         composerOpen = True;
     }
 
-    return <ScrollView style={T.screen} contentContainerStyle={[T.page, {"minHeight": "100vh", "alignContent": "flex-start"}]} keyboardShouldPersistTaps="handled">
-        <View style={T.header}>
+    return <View style={[T.screen, {"height": windowSize.height, "position": "relative", "overflow": "hidden"}]}>
+        <ScrollView style={T.screen} showsVerticalScrollIndicator={False} contentContainerStyle={[T.page, {"minHeight": windowSize.height, "paddingBottom": 110}]} keyboardShouldPersistTaps="handled">
+        <View style={[T.header, {"paddingVertical": 4}]}>
             <View style={T.row}>
-                <View style={T.brandMark}><Text style={T.brandMarkText}>SS</Text></View>
-                <View><Text style={T.brand}>Simon's Scheduler</Text><Text style={T.small}>YOUR STUDENT WORKSPACE</Text></View>
+                <Image accessibilityLabel="SiMinute logo" source={{"uri": server.rstrip("/") + "/static/assets/timon-logo.png" if remote else "/static/assets/timon-logo.png"}} style={{"width": 52, "height": 52}} resizeMode="contain"/>
+                <Text style={T.brand}>SiMinute</Text>
             </View>
-            {<Text style={T.eyebrow}>PLAN WITH CLARITY  /  MOVE WITH PURPOSE</Text> if wide else None}
+            {<Button dark={darkMode} label="⚙" quiet={True} action={lambda { section = "settings" if section == "assignments" else "assignments"; }}/> if logged and connected else None}
         </View>
-        {<View style={T.row}>
-            <Button dark={darkMode} label="Assignments" quiet={section != "assignments"} action={lambda { section = "assignments"; }}/>
-            <Button dark={darkMode} label="Settings" quiet={section != "settings"} action={lambda { section = "settings"; }}/>
-        </View> if logged and connected else None}
         {<View style={T.hero}>
             <View style={T.heroGlow}/>
             <View style={T.heroGlowSmall}/>
-            <Text style={T.heroEyebrow}>{"WELCOME BACK, " + feed.viewer.upper() if logged and feed.viewer else "A CLEARER WAY TO PLAN"}</Text>
-            <Text accessibilityRole="header" style={T.heroTitle}>{"Make room for what matters." if logged else "Your semester, beautifully organized."}</Text>
-            <Text style={T.heroText}>See what is due, find your focus, and make progress one step at a time.</Text>
+            <Text style={T.heroEyebrow}>{"WELCOME BACK, " + feed.viewer.upper() if logged and feed.viewer else "SCHEDULE"}</Text>
+            <Text accessibilityRole="header" style={T.heroTitle}>{"Your schedule" if logged else "Welcome to SiMinute"}</Text>
+            <Text style={T.heroText}>Assignments and events in one calendar.</Text>
             {<View style={[T.row, {"marginTop": 6}]}>
-                <View style={{"backgroundColor": "#FFFFFF22", "borderRadius": 10, "paddingHorizontal": 12, "paddingVertical": 8}}><Text style={{"color": "#FFFFFF", "fontWeight": "700"}}>{feed.today}</Text></View>
+                <View style={{"backgroundColor": "#FFFFFF22", "borderRadius": 10, "paddingHorizontal": 12, "paddingVertical": 8}}><Text style={{"color": "#FFFFFF", "fontWeight": "700"}}>{clockToday}</Text></View>
                 <View style={{"backgroundColor": "#FFFFFF22", "borderRadius": 10, "paddingHorizontal": 12, "paddingVertical": 8}}><Text style={{"color": "#FFFFFF", "fontWeight": "700"}}>{str(feed.total) + " assignments in your space"}</Text></View>
             </View> if logged else None}
         </View> if not logged else None}
@@ -405,13 +456,10 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
             <Button dark={darkMode} label={"I already have an account" if signup else "New here? Create an account"}
                 quiet={True} action={lambda { signup = not signup; error = ""; }} disabled={busy}/>
         </View> if connected and not logged else None}
-        {<View style={T.stack}>
-            <View style={T.between}>
+        {<View style={[T.stack, {"gap": 6, "flex": 1}]}> 
+            {<View style={T.between}>
                 <View><Text style={T.eyebrow}>YOUR WORKSPACE</Text><Text style={T.heading}>Calendar</Text></View>
-                <View style={T.row}>
-                    <Button dark={darkMode} label="+ Add assignment" action={openComposer} disabled={busy or loading}/>
-                </View>
-            </View>
+            </View> if not wide else None}
             <View style={[T.row, {"gap": 8}]}>
                 <Text style={T.small}>{str(feed.upcoming) + " due soon"}</Text>
                 <Text style={T.small}>·</Text>
@@ -419,34 +467,37 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                 <Text style={T.small}>·</Text>
                 <Text style={T.small}>{str(feed.completed) + "/" + str(feed.total) + " done"}</Text>
             </View>
-            <View style={[T.between, {"gap": 8}]}>
+            <View style={[T.between, {"gap": 6}]}>
                 <ScrollView horizontal={True} showsHorizontalScrollIndicator={False} style={{"flex": 1}} contentContainerStyle={{"gap": 6, "alignItems": "center"}}>
                     {[<Button dark={darkMode} key={v} label={v.title()} quiet={mode != v}
-                        action={lambda { mode = v; day = feed.today if v == "calendar" else feed.selected; }} disabled={loading or busy}/> for v in ["calendar", "week", "day"]]}
+                        action={lambda { mode = v; day = clockToday if v == "calendar" else feed.selected; }} disabled={loading or busy}/> for v in ["calendar", "week", "day"]]}
                 </ScrollView>
-                <Button dark={darkMode} label={"Filters (" + str(activeFilters) + ")" if activeFilters else "Filters"} quiet={True} action={lambda { filtersOpen = True; }}/>
+                <View style={T.row}>
+                    <Button dark={darkMode} label={"Filters (" + str(activeFilters) + ")" if activeFilters else "Filters"} quiet={True} action={lambda { filtersOpen = True; }}/>
+                </View>
             </View>
-                    {<View style={[T.between, T.card, {"paddingVertical": 12}]}>
+                    {<View style={[T.between, T.card, {"paddingVertical": 8, "gap": 6}]}>
                         <Button dark={darkMode} label={"Previous month" if mode == "calendar" else "Previous"} quiet={True} disabled={loading} action={lambda { navigate(-1); }}/>
                         <Text style={T.heading}>{monthLabel(feed.selected) if mode == "calendar" else feed.days[0] + " — " + feed.days[6] if mode == "week" and len(feed.days) == 7 else feed.selected}</Text>
                         <View style={T.row}>
-                            <Button dark={darkMode} label="Today" quiet={True} action={lambda { day = feed.today; }}/>
+                            <Button dark={darkMode} label="Today" quiet={True} action={lambda { day = clockToday; }}/>
                             <Button dark={darkMode} label="Jump to date" quiet={True} action={lambda { jumpDate = feed.selected; jumpOpen = True; }}/>
                             <Button dark={darkMode} label={"Next month" if mode == "calendar" else "Next"} quiet={True} disabled={loading} action={lambda { navigate(1); }}/>
                         </View>
                     </View> if mode in ["day", "week", "calendar"] else None}
-                    {<View style={[T.card, {"padding": 12, "gap": 8}]}>
-                        <View style={{"flexDirection": "row"}}>
+                    {<View style={[T.card, {"padding": 8 if wide else 12, "gap": 5 if wide else 8, "position": "relative", "flex": 1, "minHeight": windowSize.height - 390 if wide else 420}]}> 
+                        <ScrollView style={{"flex": 1}} showsVerticalScrollIndicator={False} contentContainerStyle={{"gap": 5 if wide else 8, "paddingBottom": 72}}>
+                        {<View style={{"flexDirection": "row"}}>
                             {[<Text key={name} style={[T.eyebrow, {"width": "14.285%", "textAlign": "center", "paddingVertical": 9}]}>{name}</Text> for name in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]]}
-                        </View>
+                        </View> if mode == "calendar" else None}
                         {<View style={{"flexDirection": "row", "flexWrap": "wrap"}}>
                             {for calendar_day in calendarDays(feed.selected) {
                                 <Pressable key={calendar_day} accessibilityRole="button" accessibilityLabel={"View assignments for " + calendar_day}
                                     onPress={lambda { day = calendar_day; mode = "day"; }}
-                                    style={{"width": "14.285%", "minHeight": 104 if wide else 62, "padding": 6, "borderWidth": 1, "borderColor": P.line, "backgroundColor": P.pale if calendar_day == feed.today else P.input if calendar_day[:7] != feed.selected[:7] else P.card}}>
-                                    <Text style={[T.name, {"color": P.accent if calendar_day == feed.today else P.muted if calendar_day[:7] != feed.selected[:7] else P.ink}]}>{calendar_day[8:10]}</Text>
-                                    {<Text style={[T.small, {"fontWeight": "700", "color": P.purple}]}>{str(len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day])) + " due"}</Text> if not wide and len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day]) else None}
-                                    {[<Text key={calendar_task.id} style={[T.small, {"backgroundColor": P.pale, "padding": 4, "borderRadius": 5, "color": P.accent, "textDecorationLine": "line-through" if calendar_task.completed else "none"}]}>{displayTime(calendar_task.due) + " " + calendar_task.title + (" ↻" if calendar_task.series_id else "")}</Text> for calendar_task in feed.tasks if wide and calendar_task.due[:10] == calendar_day]}
+                                    style={{"width": "14.285%", "minHeight": 104 if wide else 62, "padding": 6, "borderWidth": 1, "borderColor": P.line, "backgroundColor": P.pale if calendar_day == clockToday else P.input if calendar_day[:7] != feed.selected[:7] else P.card}}>
+                                    <Text style={[T.name, {"color": P.accent if calendar_day == clockToday else P.muted if calendar_day[:7] != feed.selected[:7] else P.ink}]}>{calendar_day[8:10]}</Text>
+                                    {<Text style={[T.small, {"fontWeight": "700", "color": P.purple}]}>{str(len([calendar_task for calendar_task in feed.tasks if calendarDayFor(calendar_task) == calendar_day])) + " due"}</Text> if not wide and len([calendar_task for calendar_task in feed.tasks if calendarDayFor(calendar_task) == calendar_day]) else None}
+                                    {[<Text key={calendar_task.id} style={[T.small, {"backgroundColor": P.pale, "padding": 4, "borderRadius": 5, "color": groupColorFor(calendar_task.course), "textDecorationLine": "line-through" if calendar_task.completed else "none"}]}>{(displayTime(calendar_task.start) + "–" + displayTime(calendar_task.end) if calendar_task.start else displayTime(calendar_task.due)) + " " + calendar_task.title + (" ↻ " + calendar_task.repeat if calendar_task.series_id else "")}</Text> for calendar_task in feed.tasks if wide and calendarDayFor(calendar_task) == calendar_day]}
                                 </Pressable>
                             }}
                         </View> if mode == "calendar" else None}
@@ -454,31 +505,71 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                             {for calendar_day in feed.days {
                                 <Pressable key={calendar_day} accessibilityRole="button" accessibilityLabel={"View assignments for " + calendar_day}
                                     onPress={lambda { day = calendar_day; mode = "day"; }}
-                                    style={{"flex": 1, "minWidth": 42, "minHeight": 116 if mode == "week" else 84, "padding": 7, "gap": 5, "borderWidth": 1, "borderColor": P.line, "borderRadius": 8, "backgroundColor": P.pale if calendar_day == feed.today else P.card}}>
-                                    <Text style={[T.eyebrow, {"textAlign": "center"}]}>{calendar_day[5:7] + "/" + calendar_day[8:10]}</Text>
-                                    {<Text style={T.small}>{str(len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day])) + " due"}</Text> if len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day]) else <Text style={T.small}>—</Text>}
+                                    style={{"flex": 1, "minWidth": 42, "minHeight": 116 if mode == "week" else 84, "padding": 7, "gap": 5, "borderWidth": 1, "borderColor": P.line, "borderRadius": 8, "backgroundColor": P.pale if calendar_day == clockToday else P.card}}>
+                                    <Text style={[T.eyebrow, {"textAlign": "center"}]}>{weekdayNames[weekdayIndex(calendar_day)] + " " + calendar_day[5:7] + "/" + calendar_day[8:10]}</Text>
+                                    {<Text style={T.small}>{str(len([calendar_task for calendar_task in feed.tasks if calendarDayFor(calendar_task) == calendar_day])) + " due"}</Text> if len([calendar_task for calendar_task in feed.tasks if calendarDayFor(calendar_task) == calendar_day]) else <Text style={T.small}>—</Text>}
                                 </Pressable>
                             }}
-                        </View> if mode == "week" else None}
-                        {<View style={{"gap": 8, "padding": 8}}>
-                            <Text style={T.eyebrow}>{"TODAY" if feed.selected == feed.today else "SELECTED DAY"}</Text>
-                            <Text style={T.small}>Drag across time slots to select a due time.</Text>
-                            <View style={{"gap": 2}}>
-                                {for slot in range(24) {
-                                    <div key={slot} onMouseDown={lambda (e: MouseEvent) { dragStart = slot; dragEnd = slot; }}
-                                        onMouseEnter={lambda (e: MouseEvent) { if dragStart >= 0 { dragEnd = slot; } }}
-                                        onMouseUp={lambda (e: MouseEvent) { if dragStart >= 0 { pickCalendarTime(min(dragStart, slot)); dragStart = -1; dragEnd = -1; } }}
-                                        style={{"height": 34, "paddingHorizontal": 10, "justifyContent": "center", "borderLeftWidth": 3, "borderLeftColor": P.accent, "borderBottomWidth": 1, "borderBottomColor": P.line, "backgroundColor": P.pale if dragStart >= 0 and slot >= min(dragStart, dragEnd) and slot <= max(dragStart, dragEnd) else P.card}}>
-                                        <Text style={T.small}>{str(slot % 12 if slot % 12 else 12) + (":00" if slot == dragStart else "") + (" AM" if slot < 12 else " PM")}</Text>
-                                    </div>
+                        </View> if mode == "week" and not wide else None}
+                        {<View style={{"gap": 2, "padding": 8}}>
+                            <View style={{"flexDirection": "row", "gap": 2}}>
+                                <View style={{"width": 54}}/>
+                                {for calendar_day in feed.days {
+                                    <Pressable key={calendar_day} accessibilityRole="button" accessibilityLabel={"View assignments for " + calendar_day}
+                                        onPress={lambda { day = calendar_day; mode = "day"; }}
+                                        style={{"flex": 1, "minWidth": 48, "padding": 7, "gap": 3, "borderWidth": 1, "borderColor": P.line, "borderRadius": 8, "backgroundColor": P.pale if calendar_day == clockToday else P.card}}>
+                                        <Text style={[T.eyebrow, {"textAlign": "center"}]}>{weekdayNames[weekdayIndex(calendar_day)] + " " + calendar_day[5:7] + "/" + calendar_day[8:10]}</Text>
+                                        <Text style={[T.small, {"textAlign": "center"}]}>{str(len([calendar_task for calendar_task in feed.tasks if (calendar_task.start[:10] if calendar_task.start else calendar_task.due[:10]) == calendar_day])) + " items"}</Text>
+                                    </Pressable>
                                 }}
                             </View>
-                            {<Text style={T.small}>No assignments scheduled.</Text> if not [calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == feed.selected] else None}
+                            {for slot in range(visibleStartHour, visibleEndHour) {
+                                    <View key={slot} style={{"flexDirection": "row", "gap": 2, "borderTopWidth": 1, "borderTopColor": P.line}}>
+                                    <View style={{"width": 54, "height": slotHeight, "justifyContent": "flex-start", "alignItems": "flex-end", "paddingRight": 5}}>
+                                        <Text style={T.small}>{str(slot % 12 if slot % 12 else 12) + (" AM" if slot < 12 else " PM")}</Text>
+                                    </View>
+                                    {for calendar_day in feed.days {
+                                        <Slot key={calendar_day + str(slot)} start={lambda (e: MouseEvent) { dragStart = slot; dragEnd = slot; dragDay = calendar_day; day = calendar_day; }}
+                                            enter={lambda (e: MouseEvent) { if dragStart >= 0 and dragDay == calendar_day { dragEnd = slot; } }}
+                                            finish={lambda (e: MouseEvent) { if dragStart >= 0 { startHour = min(dragStart, dragEnd); finishHour = max(dragStart, dragEnd) + 1; day = dragDay; pickCalendarTime(startHour, finishHour, dragDay); dragStart = -1; dragEnd = -1; dragDay = ""; } }}
+                                            tap={lambda { day = calendar_day; pickCalendarTime(slot, slot + 1, calendar_day); }}
+                                            style={{"position": "relative", "flex": 1, "minWidth": 48, "height": slotHeight, "overflow": "hidden", "borderLeftWidth": 1, "borderLeftColor": P.line, "borderRightWidth": 1, "borderRightColor": P.line, "backgroundColor": P.pale if dragStart >= 0 and dragDay == calendar_day and slot >= min(dragStart, dragEnd) and slot <= max(dragStart, dragEnd) else P.card}}>
+                                            <View style={{"position": "absolute", "left": 0, "right": 0, "top": slotHeight // 2, "borderTopWidth": 1, "borderTopColor": P.line}}/>
+                                            {<View accessibilityLabel="Current time" style={{"position": "absolute", "left": 0, "right": 0, "top": nowMinuteOffset, "height": 2, "backgroundColor": "#EF3038", "zIndex": 40, "pointerEvents": "none"}}/> if calendar_day == clockToday and slot == nowHour else None}
+                                            {[<Text key={calendar_task.id} style={[T.small, {"width": "100%", "boxSizing": "border-box", "display": "block", "padding": 3, "borderRadius": 4, "backgroundColor": P.pale, "color": groupColorFor(calendar_task.course), "textDecorationLine": "line-through" if calendar_task.completed else "none"}]}>{(displayTime(calendar_task.start) + "–" + displayTime(calendar_task.end) if calendar_task.start else displayTime(calendar_task.due)) + " " + calendar_task.title + (" ↻ " + calendar_task.repeat if calendar_task.series_id else "")}</Text> for calendar_task in feed.tasks if (calendar_task.start[:10] if calendar_task.start else calendar_task.due[:10]) == calendar_day and int((calendar_task.start if calendar_task.start else calendar_task.due)[11:13]) == slot]}
+                                        </Slot>
+                                    }}
+                                </View>
+                            }}
+                        </View> if mode == "week" and wide else None}
+                        {<View style={{"gap": 8, "padding": 8}}>
+                            <Text style={T.eyebrow}>{"TODAY" if feed.selected == clockToday else "SELECTED DAY"}</Text>
+                            <Text style={T.small}>{"Tap a time slot to create an event." if remote else "Drag within the day to create an event."}</Text>
+                            <View style={{"gap": 2}}>
+                                {for slot in range(visibleStartHour, visibleEndHour) {
+                                    <View key={slot} style={{"flexDirection": "row", "borderTopWidth": 1, "borderTopColor": P.line}}>
+                                        <View style={{"width": 54, "height": slotHeight, "justifyContent": "flex-start", "alignItems": "flex-end", "paddingRight": 5}}>
+                                            <Text style={T.small}>{str(slot % 12 if slot % 12 else 12) + (" AM" if slot < 12 else " PM")}</Text>
+                                        </View>
+                                        <Slot key={"day" + str(slot)} start={lambda (e: MouseEvent) { dragStart = slot; dragEnd = slot; dragDay = feed.selected; }}
+                                            enter={lambda (e: MouseEvent) { if dragStart >= 0 and dragDay == feed.selected { dragEnd = slot; } }}
+                                            finish={lambda (e: MouseEvent) { if dragStart >= 0 { startHour = min(dragStart, dragEnd); finishHour = max(dragStart, dragEnd) + 1; pickCalendarTime(startHour, finishHour, feed.selected); dragStart = -1; dragEnd = -1; dragDay = ""; } }}
+                                            tap={lambda { pickCalendarTime(slot, slot + 1, feed.selected); }}
+                                            style={{"position": "relative", "flex": 1, "minWidth": 48, "height": slotHeight, "overflow": "hidden", "borderLeftWidth": 1, "borderLeftColor": P.line, "borderRightWidth": 1, "borderRightColor": P.line, "backgroundColor": P.pale if dragStart >= 0 and dragDay == feed.selected and slot >= min(dragStart, dragEnd) and slot <= max(dragStart, dragEnd) else P.card}}>
+                                            <View style={{"position": "absolute", "left": 0, "right": 0, "top": slotHeight // 2, "borderTopWidth": 1, "borderTopColor": P.line}}/>
+                                            {<View accessibilityLabel="Current time" style={{"position": "absolute", "left": 0, "right": 0, "top": nowMinuteOffset, "height": 2, "backgroundColor": "#EF3038", "zIndex": 40, "pointerEvents": "none"}}/> if feed.selected == clockToday and slot == nowHour else None}
+                                            {[<Text key={calendar_task.id} style={[T.small, {"width": "100%", "boxSizing": "border-box", "display": "block", "padding": 3, "borderRadius": 4, "backgroundColor": P.pale, "color": groupColorFor(calendar_task.course), "textDecorationLine": "line-through" if calendar_task.completed else "none"}]}>{(displayTime(calendar_task.start) + "–" + displayTime(calendar_task.end) if calendar_task.start else displayTime(calendar_task.due)) + " " + calendar_task.title + (" ↻ " + calendar_task.repeat if calendar_task.series_id else "")}</Text> for calendar_task in feed.tasks if (calendar_task.start[:10] if calendar_task.start else calendar_task.due[:10]) == feed.selected and int((calendar_task.start if calendar_task.start else calendar_task.due)[11:13]) == slot]}
+                                        </Slot>
+                                    </View>
+                                }}
+                            </View>
+                            {<Text style={T.small}>No assignments scheduled.</Text> if not [calendar_task for calendar_task in feed.tasks if calendarDayFor(calendar_task) == feed.selected] else None}
                             {[<View key={calendar_task.id} style={[T.between, {"padding": 10, "borderRadius": 9, "backgroundColor": P.pale}]}>
-                                <View style={{"gap": 3}}><Text style={T.name}>{calendar_task.title}</Text><Text style={T.small}>{calendar_task.course + " · " + displayTime(calendar_task.due)}</Text></View>
-                                <Text style={T.eyebrow}>{calendar_task.priority.upper()}</Text>
-                            </View> for calendar_task in feed.tasks if calendar_task.due[:10] == feed.selected]}
+                                <View style={{"gap": 3}}><Text style={T.name}>{calendar_task.title}</Text><View style={T.row}><View style={{"width": 8, "height": 8, "borderRadius": 4, "backgroundColor": groupColorFor(calendar_task.course)}}/><Text style={T.small}>{calendar_task.course + " · " + (displayTime(calendar_task.start) + "–" + displayTime(calendar_task.end) if calendar_task.start else displayTime(calendar_task.due)) + (" · ↻ " + calendar_task.repeat if calendar_task.series_id else "")}</Text></View></View>
+                                <View style={T.row}><Text style={T.eyebrow}>{"EVENT" if calendar_task.start else "DUE"}</Text><Button dark={darkMode} label="Edit" quiet={True} action={lambda { edit(calendar_task); }}/><Button dark={darkMode} label="Delete" quiet={True} action={lambda { act("delete", calendar_task.id); }}/></View>
+                            </View> for calendar_task in feed.tasks if calendarDayFor(calendar_task) == feed.selected]}
                         </View> if mode == "day" else None}
+                        </ScrollView>
                     </View> if mode in ["calendar", "week", "day"] and not loading else None}
                     {<Text style={T.small}>{str(len(feed.tasks)) + " assignments in this view"}</Text> if mode not in ["calendar", "week", "day"] else None}
                     {<Text style={T.small}>Loading your planner…</Text> if loading else None}
@@ -491,7 +582,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                             <View style={T.between}>
                                 <View style={{"flex": 1, "minWidth": 180, "gap": 4}}>
                                     <Text style={[T.name, {"fontSize": 16, "textDecorationLine": "line-through" if task.completed else "none"}]}>{task.title}</Text>
-                                    <Text style={T.small}>{task.course + "  ·  " + task.due[:10] + "  ·  " + displayTime(task.due) + ("  ·  ↻ " + task.repeat if task.series_id else "")}</Text>
+                                    <View style={T.row}><View style={{"width": 8, "height": 8, "borderRadius": 4, "backgroundColor": groupColorFor(task.course)}}/><Text style={T.small}>{task.course + "  ·  " + task.due[:10] + "  ·  " + displayTime(task.due) + ("  ·  ↻ " + task.repeat if task.series_id else "")}</Text></View>
                                 </View>
                                 <View style={T.row}>
                                     <Button dark={darkMode} label={"Reopen" if task.completed else "Done"} action={lambda { act("complete", task.id, not task.completed); }} disabled={busy}/>
@@ -515,12 +606,46 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                     }}
         </View> if logged and connected and section == "assignments" else None}
         {<View style={{"width": "100%", "maxWidth": 560, "gap": 12}}>
-            <View><Text style={T.eyebrow}>PREFERENCES</Text><Text style={T.heading}>Settings</Text></View>
+            <View style={[T.row, {"gap": 12}]}>
+                <Button dark={darkMode} label="←" quiet={True} action={lambda { section = "assignments"; }}/>
+                <View><Text style={T.eyebrow}>PREFERENCES</Text><Text style={T.heading}>Settings</Text></View>
+            </View>
             <View style={T.card}>
                 <View style={T.between}>
-                    <View style={{"gap": 4}}><Text style={T.name}>Dark mode</Text><Text style={T.small}>Use a darker background throughout Simon's Scheduler.</Text></View>
+                    <View style={{"gap": 4}}><Text style={T.name}>Dark mode</Text><Text style={T.small}>{"Use a darker background throughout " + feed.viewer + "'s schedule." if feed.viewer else "Use a darker background throughout your schedule."}</Text></View>
                     <Button dark={darkMode} label={"On" if darkMode else "Off"} quiet={not darkMode} action={toggleDarkMode}/>
                 </View>
+            </View>
+            <View style={T.card}>
+                <Text style={T.heading}>Courses and clubs</Text>
+                <Text style={T.small}>Create groups for assignments and events. Each group color appears beside its items.</Text>
+                <Field dark={darkMode} label="Course or club name" value={groupName} change={lambda (t: str) { groupName = t; }}/>
+                <View style={T.row}>
+                    <Button dark={darkMode} label="Course" quiet={groupKind != "course"} action={lambda { groupKind = "course"; }}/>
+                    <Button dark={darkMode} label="Club" quiet={groupKind != "club"} action={lambda { groupKind = "club"; }}/>
+                </View>
+                <Text style={T.small}>Choose a color</Text>
+                <View style={T.row}>
+                    {[<Pressable key={color} accessibilityRole="button" accessibilityLabel={"Choose color " + color}
+                        onPress={lambda { groupColorChoice = color; }}
+                        style={{"width": 28, "height": 28, "borderRadius": 14, "backgroundColor": color, "borderWidth": 3 if groupColorChoice == color else 1, "borderColor": P.ink if groupColorChoice == color else P.line}}/> for color in groupColors]}
+                </View>
+                <Button dark={darkMode} label={"Add " + groupKind} action={createGroup} disabled={busy or not groupName.strip()}/>
+                {<View style={{"gap": 10}}>
+                    <Text style={T.name}>Your groups</Text>
+                    {[<View key={group.name} style={[T.between, {"paddingVertical": 8, "borderTopWidth": 1, "borderTopColor": P.line}]}>
+                        <View style={T.row}>
+                            <View style={{"width": 12, "height": 12, "borderRadius": 6, "backgroundColor": group.color}}/>
+                            <View><Text style={T.name}>{group.name}</Text><Text style={T.small}>{group.kind.title()}</Text></View>
+                        </View>
+                        <View style={T.row}>
+                            {[<Pressable key={color} accessibilityRole="button" accessibilityLabel={"Set " + group.name + " color to " + color}
+                                onPress={lambda { recolorGroup(group.name, group.kind, color); }}
+                                style={{"width": 20, "height": 20, "borderRadius": 10, "backgroundColor": color, "borderWidth": 2 if group.color == color else 1, "borderColor": P.ink if group.color == color else P.line}}/> for color in groupColors]}
+                        </View>
+                    </View> for group in feed.groups]}
+                    {<Text style={T.small}>No groups yet. Add a course or club above.</Text> if not feed.groups else None}
+                </View>}
             </View>
             <View style={T.card}>
                 <Text style={T.name}>Account</Text>
@@ -539,20 +664,34 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
             <View style={{"flex": 1, "justifyContent": "center", "alignItems": "center", "padding": 12, "backgroundColor": "#17213CCC"}}>
                 <View style={[T.card, {"width": "100%", "maxWidth": 520, "maxHeight": "96%", "padding": 18, "gap": 10}]}>
                     <View style={T.between}>
-                        <Text style={T.heading}>{"Edit assignment" if editing else "Add assignment"}</Text>
+                        <Text style={T.heading}>{"Edit event" if editing and itemType == "event" else "Edit assignment" if editing else "Add event" if itemType == "event" else "Add assignment"}</Text>
                         <Button dark={darkMode} label="Close" quiet={True} action={lambda { composerOpen = False; }}/>
                     </View>
                     {<Text accessibilityRole="alert" style={T.error}>{error}</Text> if error else None}
                     {<View style={{"gap": 10}}>
-                        <Field dark={darkMode} label="What is due?" value={title} change={lambda (t: str) { title = t; }}/>
-                        <Field dark={darkMode} label="Course" value={course} change={lambda (t: str) { course = t; }}/>
-                        <TimePicker dark={darkMode} value={due} change={lambda (t: str) { due = t; }}/>
-                        {<CheckRow dark={darkMode} label="Repeat this assignment" checked={recurring} action={toggleRecurring}/> if not editing else None}
+                        <Text style={T.name}>What are you adding?</Text>
+                        <View style={T.row}>
+                            <Button dark={darkMode} label="Assignment" quiet={itemType != "assignment"} action={lambda { itemType = "assignment"; } } disabled={bool(editing)}/>
+                            <Button dark={darkMode} label="Event" quiet={itemType != "event"} action={lambda { if itemType != "event" { course = ""; } itemType = "event"; } } disabled={bool(editing)}/>
+                        </View>
+                        <Field dark={darkMode} label={"Event title" if itemType == "event" else "What is due?"} value={title} change={lambda (t: str) { title = t; }}/>
+                        <Field dark={darkMode} label={"Course or club (optional)" if itemType == "event" else "Course or club"} value={course} change={lambda (t: str) { course = t; }}/>
+                        {<Button dark={darkMode} label="None" quiet={course != ""} action={lambda { course = ""; }}/> if itemType == "event" else None}
+                        {<View style={{"gap": 6}}>
+                            <Text style={T.small}>Or choose a saved group</Text>
+                            <View style={T.row}>{[<Button dark={darkMode} key={group.name} label={group.name} quiet={course != group.name} action={lambda { course = group.name; }}/> for group in feed.groups]}</View>
+                        </View> if feed.groups else None}
+                        {<View style={{"gap": 10}}>
+                            <Picker dark={darkMode} value={eventStart} label="Event starts" change={lambda (t: str) { eventStart = t; }}/>
+                            <Picker dark={darkMode} value={eventEnd} label="Event ends" change={lambda (t: str) { eventEnd = t; }}/>
+                            <Text style={T.small}>End time must be later than start time.</Text>
+                        </View> if itemType == "event" else <Picker dark={darkMode} value={due} change={lambda (t: str) { due = t; }}/>}
+                        {<CheckRow dark={darkMode} label={"Repeat this event" if itemType == "event" else "Repeat this assignment"} checked={recurring} action={toggleRecurring}/> if not editing else None}
                         {<View style={{"gap": 4}}>
-                            <Text style={T.small}>{"Repeats " + repeatFrequency}</Text>
-                            <CheckRow dark={darkMode} label="Update this and future dates" checked={editFuture} action={lambda { editFuture = not editFuture; }}/>
+                            <Text style={T.small}>{("Repeats " + repeatFrequency) if itemType == "event" else ("Repeats " + repeatFrequency)}</Text>
+                            <CheckRow dark={darkMode} label="Update this and future occurrences" checked={editFuture} action={lambda { editFuture = not editFuture; }}/>
                         </View> if editing and recurring else None}
-                        {<Button dark={darkMode} label={"Repeat: " + repeatFrequency + " · " + str(repeatCount) + " dates"} quiet={True} action={lambda { editorPane = "repeat"; }}/> if recurring and not editing else None}
+                        {<Button dark={darkMode} label={"Repeat: " + repeatFrequency + " · " + str(repeatCount) + (" events" if itemType == "event" else " dates")} quiet={True} action={lambda { editorPane = "repeat"; }}/> if recurring and not editing else None}
                     </View> if editorPane == "main" else None}
                     {<View style={{"gap": 8}}>
                         <Text style={T.small}>{title if title else "New assignment"}</Text>
@@ -562,7 +701,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                     </View> if editorPane == "details" else None}
                     {<View style={{"gap": 10}}>
                         <Text style={T.name}>Repeat</Text>
-                        <Text style={T.small}>Each date becomes an assignment you can complete separately.</Text>
+                        <Text style={T.small}>{"Each date creates a separate event occurrence." if itemType == "event" else "Each date becomes an assignment you can complete separately."}</Text>
                         <View style={T.row}>{[<Button dark={darkMode} key={frequency} label={frequency.title()} quiet={repeatFrequency != frequency} action={lambda { repeatFrequency = frequency; }}/> for frequency in ["daily", "weekly", "monthly"]]}</View>
                         <Text style={T.name}>Number of dates</Text>
                         <View style={T.row}>{[<Button dark={darkMode} key={count} label={str(count)} quiet={repeatCount != count} action={lambda { repeatCount = count; }}/> for count in [4, 8, 12, 16]]}</View>
@@ -570,8 +709,8 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                     </View> if editorPane == "repeat" else None}
                     <View style={T.between}>
                         <Button dark={darkMode} label={"Back" if editorPane != "main" else "Priority & notes"} quiet={True} action={lambda { editorPane = "main" if editorPane != "main" else "details"; }}/>
-                        <Button dark={darkMode} label={"Saving…" if busy else "Save changes" if editing else "Add " + str(repeatCount) + " dates" if recurring else "Add assignment"}
-                            action={lambda { act("save"); }} disabled={busy or not title.strip()}/>
+                        <Button dark={darkMode} label={"Saving…" if busy else "Save event" if itemType == "event" and editing else "Add " + str(repeatCount) + " events" if itemType == "event" and recurring and not editing else "Save event" if itemType == "event" else "Save changes" if editing else "Add " + str(repeatCount) + " dates" if recurring else "Add assignment"}
+                            action={lambda { act("save"); }} disabled={busy or not title.strip() or itemType == "event" and eventEnd <= eventStart}/>
                     </View>
                 </View>
             </View>
@@ -581,11 +720,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
             <View style={{"flex": 1, "justifyContent": "center", "alignItems": "center", "padding": 12, "backgroundColor": "#17213CCC"}}>
                 <View style={[T.card, {"width": "100%", "maxWidth": 380, "padding": 18, "gap": 12}]}>
                     <Text style={T.heading}>Jump to date</Text>
-                    <input aria-label="Choose calendar date" type="date" value={jumpDate}
-                        onChange={lambda (e: ChangeEvent) { jumpDate = e.target.value as str; }}
-                        style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line,
-                            "fontSize": 15, "backgroundColor": P.input, "color": P.ink,
-                            "colorScheme": "dark" if darkMode else "light"}}/>
+                    <CalendarDateInput value={jumpDate} change={lambda (t: str) { jumpDate = t; }} dark={darkMode}/>
                     <View style={T.row}>
                         <Button dark={darkMode} label="Go to date" action={jumpToDate} disabled={len(jumpDate) != 10}/>
                         <Button dark={darkMode} label="Cancel" quiet={True} action={lambda { jumpOpen = False; }}/>
@@ -601,7 +736,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                     <Text style={T.name}>Course</Text>
                     <ScrollView horizontal={True} showsHorizontalScrollIndicator={False} contentContainerStyle={{"gap": 6}}>
                         <Button dark={darkMode} label="All courses" quiet={courseFilter != ""} action={lambda { courseFilter = ""; }}/>
-                        {[<Button dark={darkMode} key={c} label={c} quiet={courseFilter != c} action={lambda { courseFilter = c; }}/> for c in feed.courses]}
+                        {[<Button dark={darkMode} key={group.name} label={group.name} quiet={courseFilter != group.name} action={lambda { courseFilter = group.name; }}/> for group in feed.groups]}
                     </ScrollView>
                     <Text style={T.name}>Priority</Text>
                     <View style={T.row}>
@@ -627,8 +762,9 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
                 </View>
             </View>
         </Modal>
-        <View style={T.footer}>
-            <Text style={T.small}>Simon's Scheduler · Make every day count.</Text>
-        </View>
-    </ScrollView>;
+        </ScrollView>
+        {<View style={{"position": "absolute", "right": "6%", "bottom": "5%", "zIndex": 1000}}>
+            <Button dark={darkMode} label="+ Add assignment" action={openComposer} disabled={busy or loading}/>
+        </View> if logged and connected and section == "assignments" and mode in ["calendar", "week", "day"] else None}
+    </View>;
 }

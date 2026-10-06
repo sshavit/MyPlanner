@@ -92,6 +92,28 @@ test "date boundaries and dashboard counts" {
     }
 }
 
+test "events allow no group including recurring edits" {
+    with TemporaryDirectory() as folder {
+        client = JacTestClient.from_file(str(Path(__file__).with_name("feed.jac")), base_path=folder);
+        try {
+            assert client.register_user("events", "planner-secret-123").ok;
+            assert client.login("events", "planner-secret-123").ok;
+            call(client, "join", {"username": "events"});
+            fields = {"title": "Personal event", "course": "", "start": "2026-10-05T12:00", "end": "2026-10-05T13:00"};
+            id = call(client, "save_event", fields);
+            call(client, "save_event", {**fields, "event_id": id, "course": " "});
+            ids = call(client, "create_recurring_event", {**fields, "course": "Club", "occurrences": 2});
+            assert call(client, "update_event_series", {**fields, "event_id": ids[0]}) == 2;
+            call(client, "create_recurring_event", {**fields, "occurrences": 2});
+            planner = call(client, "load_planner", {"mode": "all"});
+            assert len(planner["tasks"]) == 5;
+            assert all(t["course"] == "" for t in planner["tasks"]);
+            assert planner["courses"] == [] and planner["groups"] == [];
+            assert not client.post("/function/save_event", json={**fields, "course": "x" * 61}).ok;
+        } finally { client.close(); JacRuntime.set_shared_root_resolver(None); }
+    }
+}
+
 test "AI delegates typed study steps through by llm" {
     fake = MockLLM(outputs=[["Read the rubric", "Implement the API", "Test the app"]]);
     with patch(__name__ + ".llm", fake) {

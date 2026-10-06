@@ -1,12 +1,22 @@
 import argparse;
+import argparse;
+import asyncio;
 import asyncio;
 import getpass;
+import getpass;
+import json;
 import json;
 import os;
+import os;
+import sys;
 import sys;
 import urllib.request;
+import urllib.request;
+import from pathlib { Path }
 import from pathlib { Path }
 import from jaclang.server { sv_client }
+import from jaclang.server { sv_client }
+import from core.feed { join, save_task, complete_task, load_planner }
 import from core.feed { join, save_task, complete_task, load_planner }
 
 def auth_request(base: str, username: str, password: str) -> str {
@@ -20,7 +30,7 @@ def auth_request(base: str, username: str, password: str) -> str {
 }
 
 async def main -> int {
-    parser = argparse.ArgumentParser(description="Simon's Scheduler: your student planner in a terminal.");
+    parser = argparse.ArgumentParser(description="SiMinute student planner.");
     parser.add_argument("--url", `default=os.environ.get("PLANNER_URL", "http://127.0.0.1:8000"));
     parser.add_argument("command", choices=["login", "logout", "add", "today", "upcoming", "all", "complete"]);
     parser.add_argument("value", nargs="?", `default="", help="Username, task title, or task ID");
@@ -31,11 +41,15 @@ async def main -> int {
     parser.add_argument("--json", action="store_true", dest="as_json");
     args = parser.parse_args();
     base = str(args.url).rstrip("/");
-    credentials = Path(os.environ.get("PLANNER_SESSION", str(Path.home() / ".daymark.json")));
+    session_path = os.environ.get("PLANNER_SESSION");
+    credentials = Path(session_path) if session_path else Path.home() / ".timon.json";
+    legacy_credentials = Path.home() / ".daymark.json";
     os.environ["JAC_APP_FEED_URL"] = base + "/api/feed";
     try {
         if args.command == "logout" {
-            credentials.unlink(missing_ok=True); print("Signed out."); return 0;
+            credentials.unlink(missing_ok=True);
+            if not session_path { legacy_credentials.unlink(missing_ok=True); }
+            print("Signed out."); return 0;
         }
         if args.command == "login" {
             if not args.value { parser.error("login needs a username; create your account in the web app first"); }
@@ -47,6 +61,9 @@ async def main -> int {
             with os.fdopen(fd, "w") as handle { json.dump({"url": base, "token": token}, handle); }
             credentials.chmod(0o600);
             print("Signed in as " + name); return 0;
+        }
+        if not credentials.exists() and not session_path and legacy_credentials.exists() {
+            credentials = legacy_credentials;
         }
         if not credentials.exists() { raise ValueError("Run: jac run cli -- login USERNAME"); }
         saved = json.loads(credentials.read_text());
@@ -75,6 +92,6 @@ async def main -> int {
             }
         }
         return 0;
-    } except Exception as e { print("Simon's Scheduler: " + str(e), file=sys.stderr); return 1; }
+    } except Exception as e { print("SiMinute: " + str(e), file=sys.stderr); return 1; }
 }
 with entry:__main__ { sys.`exit(asyncio.run(main())); }
