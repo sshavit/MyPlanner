@@ -50,8 +50,7 @@ export PLANNER_TIMEZONE="America/New_York"
 jac run
 ```
 
-The default timezone is `America/New_York`. Enter due dates as
-`YYYY-MM-DDTHH:MM`, for example `2026-10-09T23:59`.
+The default timezone is `America/New_York`.
 
 ## CLI
 
