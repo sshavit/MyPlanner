@@ -112,8 +112,15 @@ def:pub load_planner(mode: str = "dashboard", day: str = "", course: str = "",
     now = clock();
     today = now.date();
     selected = datetime.date.fromisoformat(day) if day else today;
-    selected += datetime.timedelta(days=int(shift));
-    if mode not in ["dashboard", "day", "week", "all", "upcoming", "overdue"] {
+    if mode == "calendar" and shift {
+        month_index = selected.year * 12 + selected.month - 1 + int(shift);
+        year = month_index // 12;
+        month_zero = month_index % 12;
+        selected = datetime.date(year, month_zero + 1, 1);
+    } else {
+        selected += datetime.timedelta(days=int(shift));
+    }
+    if mode not in ["dashboard", "day", "week", "calendar", "all", "upcoming", "overdue"] {
         raise ValueError("Unknown view.");
     }
     if status not in ["open", "completed", "all"] { raise ValueError("Unknown status."); }
@@ -129,12 +136,16 @@ def:pub load_planner(mode: str = "dashboard", day: str = "", course: str = "",
     result.upcoming = sum(1 for t in tasks if not t.completed and t.due >= result.now and t.due[:10] < horizon);
     result.courses = sorted({t.course for t in tasks});
     start = selected - datetime.timedelta(days=selected.weekday()) if mode == "week" else selected;
-    result.days = [(start + datetime.timedelta(days=i)).isoformat() for i in range(7 if mode == "week" else 1)];
+    if mode == "calendar" {
+        first = selected.replace(day=1);
+        start = first - datetime.timedelta(days=(first.weekday() + 1) % 7);
+    }
+    result.days = [(start + datetime.timedelta(days=i)).isoformat() for i in range(42 if mode == "calendar" else 7 if mode == "week" else 1)];
     for t in tasks {
         if course and t.course != course { continue; }
         if priority and t.priority != priority { continue; }
         if status == "open" and t.completed or status == "completed" and not t.completed { continue; }
-        if mode in ["day", "week"] and t.due[:10] not in result.days { continue; }
+        if mode in ["day", "week", "calendar"] and t.due[:10] not in result.days { continue; }
         if mode == "upcoming" and (t.due < result.now or t.due[:10] >= horizon) { continue; }
         if mode == "overdue" and (t.completed or t.due >= result.now) { continue; }
         if mode == "dashboard" and t.due[:10] >= horizon { continue; }

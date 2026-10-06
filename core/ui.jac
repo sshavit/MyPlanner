@@ -4,6 +4,7 @@ import from "@jac/mobui" {
     TextInput,
     Pressable,
     ScrollView,
+    Modal,
     useWindowDimensions
 }
 import from "@jac/runtime" {
@@ -15,11 +16,13 @@ import from "@jac/runtime" {
     __setLocalStorage
 }
 import from core.feed { Planner, TaskView, Breakdown, join, save_task, complete_task, delete_task, load_planner, break_down, accept_steps }
-import from core.theme { S, C }
+import from core.theme { S, C, SD, CD }
 
 def Button(
-    label: str, action: Callable, quiet: bool = False, disabled: bool = False
+    label: str, action: Callable, quiet: bool = False, disabled: bool = False,
+    dark: bool = False
 ) -> JsxElement {
+    T = SD if dark else S;
     return
         <Pressable
             accessibilityRole="button"
@@ -27,22 +30,106 @@ def Button(
             disabled={disabled}
             onPress={action}
             style={[
-                S.button,
-                S.quiet if quiet else {},
+                T.button,
+                T.quiet if quiet else {},
                 {"opacity": 0.45 if disabled else 1}
             ]}
         >
-            <Text style={[S.buttonText, S.quietText if quiet else {}]}>{label}</Text>
+            <Text style={[T.buttonText, T.quietText if quiet else {}]}>{label}</Text>
         </Pressable>;
 }
 
-def Field(label: str, value: str, change: Callable, multiline: bool = False) -> JsxElement {
+def Field(label: str, value: str, change: Callable, multiline: bool = False, dark: bool = False) -> JsxElement {
+    T = SD if dark else S;
+    P = CD if dark else C;
     return <View style={{"gap": 6}}>
-        <Text style={S.name}>{label}</Text>
+        <Text style={T.name}>{label}</Text>
         <TextInput accessibilityLabel={label} value={value} onChangeText={change}
-            style={[S.input, S.composer if multiline else {}]} multiline={multiline}
-            autoCapitalize="none" placeholder={label} placeholderTextColor={C.muted}/>
+            style={[T.input, T.composer if multiline else {}]} multiline={multiline}
+            autoCapitalize="none" placeholder={label} placeholderTextColor={P.muted}/>
     </View>;
+}
+
+def TimePicker(value: str, change: Callable, dark: bool = False) -> JsxElement {
+    T = SD if dark else S;
+    P = CD if dark else C;
+    date = value[:10] if len(value) >= 10 else "2026-01-01";
+    hour = value[11:13] if len(value) >= 13 else "23";
+    minute = value[14:16] if len(value) >= 16 else "59";
+    hours = [f"{h:02d}" for h in range(24)];
+    minutes = [f"{m:02d}" for m in range(0, 60, 5)];
+    return <View style={{"gap": 6}}>
+        <Text style={T.name}>Due date and time</Text>
+        <input aria-label="Due date" type="date" value={date} onChange={lambda (e: ChangeEvent) { change((e.target.value as str) + "T" + hour + ":" + minute); }}
+            style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}/>
+        <View style={T.row}>
+            <View style={{"flex": 1, "gap": 6}}>
+                <Text style={T.name}>Hour</Text>
+                <select aria-label="Due hour" value={hour} onChange={lambda (e: ChangeEvent) { change(date + "T" + (e.target.value as str) + ":" + minute); }} style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}>
+                    {for h in hours { <option key={h} value={h}>{h}</option> }}
+                </select>
+            </View>
+            <View style={{"flex": 1, "gap": 6}}>
+                <Text style={T.name}>Minute</Text>
+                <select aria-label="Due minute" value={minute} onChange={lambda (e: ChangeEvent) { change(date + "T" + hour + ":" + (e.target.value as str)); }} style={{"padding": 13, "borderRadius": 12, "border": "1px solid " + P.line, "fontSize": 15, "backgroundColor": P.input, "color": P.ink, "colorScheme": "dark" if dark else "light"}}>
+                    {for m in minutes { <option key={m} value={m}>{m}</option> }}
+                    <option value="59">59</option>
+                </select>
+            </View>
+        </View>
+    </View>;
+}
+
+def monthLabel(day: str) -> str {
+    if len(day) < 7 { return "Calendar"; }
+    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return months[int(day[5:7]) - 1] + " " + day[:4];
+}
+
+def displayTime(due: str) -> str {
+    if len(due) < 16 { return due; }
+    hour = int(due[11:13]);
+    return str(hour % 12 if hour % 12 else 12) + ":" + due[14:16] + (" AM" if hour < 12 else " PM");
+}
+
+def daysInMonth(year: int, month: int) -> int {
+    if month == 2 {
+        return 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28;
+    }
+    return 30 if month in [4, 6, 9, 11] else 31;
+}
+
+def shiftMonth(day: str, shift: int) -> str {
+    if len(day) < 10 { return day; }
+    index = int(day[:4]) * 12 + int(day[5:7]) - 1 + shift;
+    year = index // 12;
+    month = index % 12 + 1;
+    return f"{year:04d}-{month:02d}-01";
+}
+
+def calendarDays(day: str) -> list[str] {
+    if len(day) < 10 { return []; }
+    year = int(day[:4]);
+    month = int(day[5:7]);
+    prior = shiftMonth(day, -1);
+    following = shiftMonth(day, 1);
+    offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    weekdayYear = year - 1 if month < 3 else year;
+    firstWeekday = (weekdayYear + weekdayYear // 4 - weekdayYear // 100 + weekdayYear // 400 + offsets[month - 1] + 1) % 7;
+    currentCount = daysInMonth(year, month);
+    priorCount = daysInMonth(int(prior[:4]), int(prior[5:7]));
+    result: list[str] = [];
+    for i in range(42) {
+        number = i - firstWeekday + 1;
+        if number < 1 {
+            result.append(prior[:7] + f"-{priorCount + number:02d}");
+        } elif number > currentCount {
+            result.append(following[:7] + f"-{number - currentCount:02d}");
+        } else {
+            result.append(f"{year:04d}-{month:02d}-{number:02d}");
+        }
+    }
+    return result;
 }
 
 def:pub PlannerApp(remote: bool = False) -> JsxElement {
@@ -54,14 +141,23 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         priorityFilter: str = "", status: str = "open",
         title: str = "", course: str = "EECS 449", due: str = "", notes: str = "",
         priority: str = "medium", editing: str = "", deleting: str = "",
-        ai: Breakdown = Breakdown(), aiTask: str = "", aiTitle: str = "";
+        ai: Breakdown = Breakdown(), aiTask: str = "", aiTitle: str = "",
+        composerOpen: bool = False, filtersOpen: bool = False,
+        showDetails: bool = False, moreTask: str = "",
+        section: str = "assignments", darkMode: bool = False;
     wide = useWindowDimensions().width >= 1000;
+    T = SD if darkMode else S;
+    P = CD if darkMode else C;
+    activeFilters = int(courseFilter != "") + int(priorityFilter != "") + int(status != "open");
+    visibleTasks = feed.tasks if mode != "calendar" else [];
 
     async def refresh(shift: int = 0) {
         if not connected { loading = False; return; }
         loading = True;
         try {
-            feed = await load_planner(mode, day, courseFilter, priorityFilter, status, shift);
+            feed = await load_planner("all" if mode == "calendar" else mode, day,
+                courseFilter, priorityFilter, status, shift);
+            error = "";
             if shift != 0 { day = feed.selected; }
             if not due { due = feed.today + "T23:59"; }
             if logged and not feed.viewer { jacLogout(); logged = False; }
@@ -82,6 +178,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
 
     can with entry {
         logged = jacIsLoggedIn();
+        darkMode = __getLocalStorage("daymark_dark_mode") == "true";
         username = __getLocalStorage("planner_username") or "";
         server = __getLocalStorage("planner_server") or "http://localhost:8000";
         if remote and __getLocalStorage("planner_server") {
@@ -142,10 +239,14 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         editing = ""; title = ""; notes = ""; priority = "medium";
         due = feed.today + "T23:59";
     }
+    def openComposer {
+        resetForm(); showDetails = False; error = ""; composerOpen = True;
+    }
     def edit(task: TaskView) {
         editing = task.id; title = task.title; course = task.course;
         due = task.due; notes = task.notes; priority = task.priority;
-        notice = "Editing “" + task.title + "” in the assignment form.";
+        showDetails = False;
+        error = ""; composerOpen = True;
     }
     async def act(kind: str, id: str = "", done: bool = True) {
         if busy { return; }
@@ -153,7 +254,7 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
         try {
             if kind == "save" {
                 await save_task(title, course, due, priority, notes, editing);
-                notice = "Assignment saved."; resetForm();
+                notice = "Assignment saved."; resetForm(); composerOpen = False;
             } elif kind == "complete" {
                 await complete_task(id, done);
                 notice = "Assignment completed. Nice work!" if done else "Assignment reopened.";
@@ -174,137 +275,225 @@ def:pub PlannerApp(remote: bool = False) -> JsxElement {
     }
     async def logout {
         jacLogout(); logged = False; password = ""; feed = Planner();
-        resetForm(); aiTask = ""; error = ""; notice = ""; await refresh();
+        resetForm(); composerOpen = False; filtersOpen = False;
+        aiTask = ""; section = "assignments"; error = ""; notice = ""; await refresh();
+    }
+    def toggleDarkMode {
+        nextMode = not darkMode;
+        darkMode = nextMode;
+        __setLocalStorage("daymark_dark_mode", "true" if nextMode else "false");
+    }
+    def navigate(shift: int) {
+        if mode == "calendar" {
+            day = shiftMonth(feed.selected if feed.selected else feed.today, shift);
+        } else {
+            refresh(shift * (7 if mode == "week" else 1));
+        }
     }
 
-    return <ScrollView style={S.screen} contentContainerStyle={S.page} keyboardShouldPersistTaps="handled">
-        <View style={S.header}>
-            <View><Text style={S.brand}>◒  Daymark</Text><Text style={S.small}>THE STUDENT PLANNER</Text></View>
-            <Text style={S.eyebrow}>EECS 449 · MAKE ROOM TO FOCUS</Text>
+    return <ScrollView style={T.screen} contentContainerStyle={T.page} keyboardShouldPersistTaps="handled">
+        <View style={T.header}>
+            <View style={T.row}>
+                <View style={T.brandMark}><Text style={T.brandMarkText}>✦</Text></View>
+                <View><Text style={T.brand}>Daymark</Text><Text style={T.small}>YOUR STUDENT WORKSPACE</Text></View>
+            </View>
+            {<Text style={T.eyebrow}>PLAN WITH CLARITY  /  MOVE WITH PURPOSE</Text> if wide else None}
         </View>
-        <View style={S.stack}>
-            <Text style={S.eyebrow}>A LITTLE STRUCTURE. A CLEARER MIND.</Text>
-            <Text accessibilityRole="header" style={S.title}>Your semester, in perspective.</Text>
-            <Text style={S.subtitle}>Capture the deadlines. Find your next step. Make progress every day.</Text>
-        </View>
-        {<Text accessibilityRole="alert" style={S.error}>{error}</Text> if error else None}
-        {<Text accessibilityRole="status" style={S.success}>{notice}</Text> if notice else None}
-        {<View style={S.card}>
-            <Text style={S.name}>Connect to your planner</Text>
-            <Field label="Server address" value={server} change={lambda (t: str) { server = t; }}/>
-            <Button label="Connect" action={connect}/>
+        {<View style={T.row}>
+            <Button dark={darkMode} label="Assignments" quiet={section != "assignments"} action={lambda { section = "assignments"; }}/>
+            <Button dark={darkMode} label="Settings" quiet={section != "settings"} action={lambda { section = "settings"; }}/>
+        </View> if logged and connected else None}
+        {<View style={T.hero}>
+            <View style={T.heroGlow}/>
+            <View style={T.heroGlowSmall}/>
+            <Text style={T.heroEyebrow}>{"WELCOME BACK, " + feed.viewer.upper() if logged and feed.viewer else "A CLEARER WAY TO PLAN"}</Text>
+            <Text accessibilityRole="header" style={T.heroTitle}>{"Make room for what matters." if logged else "Your semester, beautifully organized."}</Text>
+            <Text style={T.heroText}>See what is due, find your focus, and make progress one step at a time.</Text>
+            {<View style={[T.row, {"marginTop": 6}]}>
+                <View style={{"backgroundColor": "#FFFFFF22", "borderRadius": 10, "paddingHorizontal": 12, "paddingVertical": 8}}><Text style={{"color": "#FFFFFF", "fontWeight": "700"}}>{feed.today}</Text></View>
+                <View style={{"backgroundColor": "#FFFFFF22", "borderRadius": 10, "paddingHorizontal": 12, "paddingVertical": 8}}><Text style={{"color": "#FFFFFF", "fontWeight": "700"}}>{str(feed.total) + " assignments in your space"}</Text></View>
+            </View> if logged else None}
+        </View> if not logged else None}
+        {<Text accessibilityRole="alert" style={T.error}>{error}</Text> if error else None}
+        {<Text accessibilityRole="status" style={T.success}>{notice}</Text> if notice else None}
+        {<View style={[T.card, {"maxWidth": 520, "width": "100%", "alignSelf": "center"}]}>
+            <Text style={T.eyebrow}>CONNECT YOUR SPACE</Text>
+            <Text style={T.heading}>Connect to your planner</Text>
+            <Field dark={darkMode} label="Server address" value={server} change={lambda (t: str) { server = t; }}/>
+            <Button dark={darkMode} label="Connect" action={connect}/>
         </View> if not connected else None}
-        {<View style={[S.card, {"maxWidth": 520}]}>
-            <Text style={S.heading}>{"Start a fresh page." if signup else "Welcome back."}</Text>
-            <Text style={S.body}>One private planner, on your laptop, phone, and terminal.</Text>
-            <Field label="Username" value={username} change={lambda (t: str) { username = t; }}/>
-            <Text style={S.name}>Password</Text>
-            <TextInput accessibilityLabel="Password" style={S.input} value={password}
+        {<View style={[T.card, {"maxWidth": 520, "width": "100%", "alignSelf": "center", "padding": 30}]}>
+            <Text style={T.eyebrow}>YOUR ACCOUNT</Text>
+            <Text style={T.heading}>{"Start a fresh page." if signup else "Welcome back."}</Text>
+            <Text style={T.body}>One private planner, on your laptop, phone, and terminal.</Text>
+            <Field dark={darkMode} label="Username" value={username} change={lambda (t: str) { username = t; }}/>
+            <Text style={T.name}>Password</Text>
+            <TextInput accessibilityLabel="Password" style={T.input} value={password}
                 secureTextEntry={True} onChangeText={lambda (t: str) { password = t; }} onSubmitEditing={authenticate}/>
-            <Button label={"Please wait…" if busy else "Create account" if signup else "Sign in"}
+            <Button dark={darkMode} label={"Please wait…" if busy else "Create account" if signup else "Sign in"}
                 action={authenticate} disabled={busy}/>
-            <Button label={"I already have an account" if signup else "New here? Create an account"}
+            <Button dark={darkMode} label={"I already have an account" if signup else "New here? Create an account"}
                 quiet={True} action={lambda { signup = not signup; error = ""; }} disabled={busy}/>
         </View> if connected and not logged else None}
-        {<View style={S.stack}>
-            <View style={S.between}>
-                <Text style={S.name}>YOUR WORKSPACE / {feed.viewer}</Text>
-                <View style={S.row}>
-                    <Button label="Refresh" quiet={True} action={lambda { error = ""; refresh(); }} disabled={busy or loading}/>
-                    <Button label="Sign out" quiet={True} action={logout} disabled={busy}/>
+        {<View style={T.stack}>
+            <View style={T.between}>
+                <View><Text style={T.eyebrow}>YOUR WORKSPACE</Text><Text style={T.heading}>Assignments</Text></View>
+                <View style={T.row}>
+                    <Button dark={darkMode} label="+ Add assignment" action={openComposer} disabled={busy or loading}/>
                 </View>
             </View>
-            <View style={S.row}>
-                <View style={[S.metric, {"backgroundColor": "#f9e9df"}]}><Text style={S.score}>{feed.overdue}</Text><Text style={S.name}>Overdue · time to regroup</Text></View>
-                <View style={S.metric}><Text style={S.score}>{feed.upcoming}</Text><Text style={S.name}>Due in the next 7 days</Text></View>
-                <View style={[S.metric, {"backgroundColor": "#e6eddf"}]}><Text style={S.score}>{feed.completed}/{feed.total}</Text><Text style={S.name}>Assignments completed</Text></View>
+            <View style={[T.row, {"gap": 8}]}>
+                <Text style={T.small}>{str(feed.upcoming) + " due soon"}</Text>
+                <Text style={T.small}>·</Text>
+                <Text style={T.small}>{str(feed.overdue) + " overdue"}</Text>
+                <Text style={T.small}>·</Text>
+                <Text style={T.small}>{str(feed.completed) + "/" + str(feed.total) + " done"}</Text>
             </View>
-            <View style={{"gap": 24, "flexDirection": "row" if wide else "column", "alignItems": "flex-start"}}>
-                <View style={[S.card, {"width": 320 if wide else "100%"}]}>
-                    <Text style={S.eyebrow}>{"MAKE AN ADJUSTMENT" if editing else "GET IT OFF YOUR MIND"}</Text>
-                    <Text style={S.heading}>{"Edit assignment" if editing else "New assignment"}</Text>
-                    <Field label="Title" value={title} change={lambda (t: str) { title = t; }}/>
-                    <Field label="Course" value={course} change={lambda (t: str) { course = t; }}/>
-                    <Field label="Due (YYYY-MM-DDTHH:MM)" value={due} change={lambda (t: str) { due = t; }}/>
-                    <Text style={S.small}>24-hour campus time. Example: 2026-10-09T23:59</Text>
-                    <Text style={S.name}>Priority</Text>
-                    <View style={S.row}>{[<Button key={p} label={p} quiet={priority != p}
-                        action={lambda { priority = p; }}/> for p in ["low", "medium", "high"]]}</View>
-                    <Field label="Notes" value={notes} change={lambda (t: str) { notes = t; }} multiline={True}/>
-                    <Button label={"Saving…" if busy else "Save changes" if editing else "Add assignment"}
-                        action={lambda { act("save"); }} disabled={busy or not title.strip()}/>
-                    {<Button label="Cancel edit" quiet={True} action={resetForm} disabled={busy}/> if editing else None}
-                    <Text style={S.small}>Small steps count. Add one assignment, then choose where to begin.</Text>
-                </View>
-                <View style={[S.stack, {"flex": 1, "width": "100%", "minWidth": 0}]}>
-                    <View style={S.row}>{[<Button key={v} label={v.title()} quiet={mode != v}
-                        action={lambda { mode = v; }} disabled={loading or busy}/> for v in ["dashboard", "day", "week", "all"]]}</View>
-                    <View style={S.card}>
-                        <Text style={S.eyebrow}>FIND YOUR FOCUS</Text>
-                        <View style={S.row}>
-                            <Button label="All courses" quiet={courseFilter != ""} action={lambda { courseFilter = ""; }}/>
-                            {[<Button key={c} label={c} quiet={courseFilter != c} action={lambda { courseFilter = c; }}/>
-                                for c in feed.courses]}
+            <View style={[T.between, {"gap": 8}]}>
+                <ScrollView horizontal={True} showsHorizontalScrollIndicator={False} style={{"flex": 1}} contentContainerStyle={{"gap": 6, "alignItems": "center"}}>
+                    {[<Button dark={darkMode} key={v} label={"Focus" if v == "dashboard" else "Month" if v == "calendar" else v.title()} quiet={mode != v}
+                        action={lambda { mode = v; }} disabled={loading or busy}/> for v in ["dashboard", "calendar", "day", "week", "all"]]}
+                </ScrollView>
+                <Button dark={darkMode} label={"Filters (" + str(activeFilters) + ")" if activeFilters else "Filters"} quiet={True} action={lambda { filtersOpen = True; }}/>
+            </View>
+                    {<View style={[T.between, T.card, {"paddingVertical": 12}]}>
+                        <Button dark={darkMode} label={"Previous month" if mode == "calendar" else "Previous"} quiet={True} disabled={loading} action={lambda { navigate(-1); }}/>
+                        <Text style={T.heading}>{monthLabel(feed.selected) if mode == "calendar" else feed.days[0] + " — " + feed.days[6] if mode == "week" and len(feed.days) == 7 else feed.selected}</Text>
+                        <Button dark={darkMode} label={"Next month" if mode == "calendar" else "Next"} quiet={True} disabled={loading} action={lambda { navigate(1); }}/>
+                    </View> if mode in ["day", "week", "calendar"] else None}
+                    {<View style={[T.card, {"padding": 12, "gap": 8}]}>
+                        <View style={{"flexDirection": "row"}}>
+                            {[<Text key={name} style={[T.eyebrow, {"width": "14.285%", "textAlign": "center", "paddingVertical": 9}]}>{name}</Text> for name in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]]}
                         </View>
-                        <View style={S.row}>
-                            <Button label="Any priority" quiet={priorityFilter != ""} action={lambda { priorityFilter = ""; }}/>
-                            {[<Button key={p} label={p.title() + " priority"} quiet={priorityFilter != p}
-                                action={lambda { priorityFilter = p; }}/> for p in ["low", "medium", "high"]]}
+                        <View style={{"flexDirection": "row", "flexWrap": "wrap"}}>
+                            {for calendar_day in calendarDays(feed.selected) {
+                                <Pressable key={calendar_day} accessibilityRole="button" accessibilityLabel={"View assignments for " + calendar_day}
+                                    onPress={lambda { day = calendar_day; mode = "day"; }}
+                                    style={{"width": "14.285%", "minHeight": 104 if wide else 62, "padding": 6, "borderWidth": 1, "borderColor": P.line, "backgroundColor": P.pale if calendar_day == feed.today else P.input if calendar_day[:7] != feed.selected[:7] else P.card}}>
+                                    <Text style={[T.name, {"color": P.accent if calendar_day == feed.today else P.muted if calendar_day[:7] != feed.selected[:7] else P.ink}]}>{calendar_day[8:10]}</Text>
+                                    {<Text style={[T.small, {"fontWeight": "700", "color": P.purple}]}>{str(len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day])) + " due"}</Text> if not wide and len([calendar_task for calendar_task in feed.tasks if calendar_task.due[:10] == calendar_day]) else None}
+                                    {[<Text key={calendar_task.id} style={[T.small, {"backgroundColor": P.pale, "padding": 4, "borderRadius": 5, "color": P.accent, "textDecorationLine": "line-through" if calendar_task.completed else "none"}]}>{displayTime(calendar_task.due) + " " + calendar_task.title}</Text> for calendar_task in feed.tasks if wide and calendar_task.due[:10] == calendar_day]}
+                                </Pressable>
+                            }}
                         </View>
-                        <View style={S.row}>{[<Button key={s} label={s.title()} quiet={status != s}
-                            action={lambda { status = s; }}/> for s in ["open", "completed", "all"]]}</View>
-                    </View>
-                    {<View style={S.between}>
-                        <Button label="Previous" quiet={True} disabled={loading} action={lambda { refresh(-7 if mode == "week" else -1); }}/>
-                        <Text style={S.name}>{feed.days[0] + " — " + feed.days[6] if mode == "week" and len(feed.days) == 7 else feed.selected}</Text>
-                        <Button label="Next" quiet={True} disabled={loading} action={lambda { refresh(7 if mode == "week" else 1); }}/>
-                    </View> if mode in ["day", "week"] else None}
-                    <View style={S.between}>
-                        <Text style={S.heading}>{"Your next steps" if mode == "dashboard" else mode.title() + " planner"}</Text>
-                        <Text style={S.small}>{len(feed.tasks)} assignments</Text>
-                    </View>
-                    {<Text style={S.small}>Overdue work and the next 7 days, sorted by deadline.</Text> if mode == "dashboard" else None}
-                    {<Text style={S.small}>Loading your planner…</Text> if loading else None}
-                    {<View style={S.card}><Text style={S.heading}>A little breathing room.</Text>
-                        <Text style={S.body}>No assignments match this view. Add something new or adjust the filters.</Text></View>
-                        if not loading and not feed.tasks else None}
-                    {for task in feed.tasks {
-                        <View key={task.id} testID={"task-" + task.id} style={[S.card,
-                            {"borderLeftWidth": 4, "borderLeftColor": "#b96543" if not task.completed and task.due < feed.now else C.accent}]}>
-                            <View style={S.between}>
-                                <Text style={S.eyebrow}>{task.course} · {task.priority.upper()}</Text>
-                                <Text style={S.small}>{"COMPLETED" if task.completed else "OVERDUE" if task.due < feed.now else "UPCOMING"}</Text>
+                    </View> if mode == "calendar" and not loading else None}
+                    {<Text style={T.small}>{str(len(feed.tasks)) + " assignments in this view"}</Text> if mode != "calendar" else None}
+                    {<Text style={T.small}>Loading your planner…</Text> if loading else None}
+                    {<View style={[T.card, {"alignItems": "center", "paddingVertical": 40}]}><Text style={{"fontSize": 32, "color": P.purple}}>✦</Text><Text style={T.heading}>A little breathing room.</Text>
+                        <Text style={[T.body, {"textAlign": "center"}]}>No assignments match this view. Add something new or adjust the filters.</Text></View>
+                        if not loading and not feed.tasks and mode != "calendar" else None}
+                    {for task in visibleTasks {
+                        <View key={task.id} testID={"task-" + task.id} style={[T.card,
+                            {"padding": 14, "gap": 8, "borderLeftWidth": 4, "borderLeftColor": "#EF7589" if not task.completed and task.due < feed.now else P.purple if task.priority == "high" else P.blue}]}>
+                            <View style={T.between}>
+                                <View style={{"flex": 1, "minWidth": 180, "gap": 4}}>
+                                    <Text style={[T.name, {"fontSize": 16, "textDecorationLine": "line-through" if task.completed else "none"}]}>{task.title}</Text>
+                                    <Text style={T.small}>{task.course + "  ·  " + task.due[:10] + "  ·  " + displayTime(task.due)}</Text>
+                                </View>
+                                <View style={T.row}>
+                                    <Button dark={darkMode} label={"Reopen" if task.completed else "Done"} action={lambda { act("complete", task.id, not task.completed); }} disabled={busy}/>
+                                    <Button dark={darkMode} label={"Less" if moreTask == task.id else "More"} quiet={True} action={lambda { moreTask = "" if moreTask == task.id else task.id; }}/>
+                                </View>
                             </View>
-                            <Text style={[S.heading, {"textDecorationLine": "line-through" if task.completed else "none"}]}>{task.title}</Text>
-                            <Text style={S.name}>Due {task.due.replace("T", " · ")}</Text>
-                            {<Text selectable={True} style={S.body}>{task.notes}</Text> if task.notes else None}
-                            <View style={S.row}>
-                                <Button label={"Reopen" if task.completed else "Complete"} action={lambda { act("complete", task.id, not task.completed); }} disabled={busy}/>
-                                <Button label="Edit" quiet={True} action={lambda { edit(task); }} disabled={busy}/>
-                                <Button label="Break into steps ✦" quiet={True} disabled={busy} action={lambda { aiTitle = task.title; act("ai", task.id); }}/>
-                                <Button label="Delete" quiet={True} action={lambda { deleting = task.id; }} disabled={busy}/>
-                            </View>
-                            {<View style={S.row}><Text style={S.body}>Delete this assignment?</Text>
-                                <Button label="Confirm delete" action={lambda { act("delete", task.id); }} disabled={busy}/>
-                                <Button label="Keep task" quiet={True} action={lambda { deleting = ""; }}/></View> if deleting == task.id else None}
+                            {<View style={{"gap": 9, "paddingTop": 8, "borderTopWidth": 1, "borderTopColor": P.line}}>
+                                <Text style={T.eyebrow}>{task.priority.upper() + " PRIORITY  ·  " + ("COMPLETED" if task.completed else "OVERDUE" if task.due < feed.now else "UPCOMING")}</Text>
+                                {<Text selectable={True} style={T.body}>{task.notes}</Text> if task.notes else None}
+                                <View style={T.row}>
+                                    <Button dark={darkMode} label="Edit" quiet={True} action={lambda { edit(task); }} disabled={busy}/>
+                                    <Button dark={darkMode} label="Break into steps ✦" quiet={True} disabled={busy} action={lambda { aiTitle = task.title; act("ai", task.id); }}/>
+                                    <Button dark={darkMode} label="Delete" quiet={True} action={lambda { deleting = task.id; }} disabled={busy}/>
+                                </View>
+                            </View> if moreTask == task.id else None}
+                            {<View style={T.row}><Text style={T.body}>Delete this assignment?</Text>
+                                <Button dark={darkMode} label="Confirm delete" action={lambda { act("delete", task.id); }} disabled={busy}/>
+                                <Button dark={darkMode} label="Keep task" quiet={True} action={lambda { deleting = ""; }}/></View> if deleting == task.id else None}
                         </View>
                     }}
-                    {<View style={[S.card, {"backgroundColor": "#e6eddf"}]}>
-                        <Text style={S.eyebrow}>STUDY COACH ✦ AI BREAKDOWN</Text>
-                        <Text style={S.heading}>{aiTitle}</Text>
-                        <Text style={S.body}>{"Review these steps before adding them. They inherit the assignment’s deadline; edit dates to spread out your work." if ai.available else ai.message}</Text>
-                        {[<Text key={step} style={S.body}>• {step}</Text> for step in ai.steps]}
-                        {<Button label="Add these study steps" action={lambda { act("accept"); }} disabled={busy}/> if ai.available and ai.steps else None}
-                        <Button label="Dismiss" quiet={True} action={lambda { aiTask = ""; ai = Breakdown(); }}/>
-                    </View> if aiTask else None}
+        </View> if logged and connected and section == "assignments" else None}
+        {<View style={{"width": "100%", "maxWidth": 560, "gap": 12}}>
+            <View><Text style={T.eyebrow}>PREFERENCES</Text><Text style={T.heading}>Settings</Text></View>
+            <View style={T.card}>
+                <View style={T.between}>
+                    <View style={{"gap": 4}}><Text style={T.name}>Dark mode</Text><Text style={T.small}>Use a darker background throughout Daymark.</Text></View>
+                    <Button dark={darkMode} label={"On" if darkMode else "Off"} quiet={not darkMode} action={toggleDarkMode}/>
                 </View>
             </View>
-        </View> if logged and connected else None}
-        <View style={S.footer}>
-            {<Button label="Change server" quiet={True} action={lambda {
-                jacLogout(); logged = False; connected = False; feed = Planner(); error = "";
-            }}/> if remote and connected else None}
-            <Text style={S.small}>Daymark · One semester. One step at a time.</Text>
+            <View style={T.card}>
+                <Text style={T.name}>Account</Text>
+                <Text style={T.small}>{"Signed in as " + feed.viewer}</Text>
+                <View style={T.row}>
+                    <Button dark={darkMode} label="Sign out" action={logout} disabled={busy}/>
+                    {<Button dark={darkMode} label="Change server" quiet={True} action={lambda {
+                        jacLogout(); logged = False; connected = False; feed = Planner();
+                        section = "assignments"; error = "";
+                    }}/> if remote else None}
+                </View>
+            </View>
+        </View> if logged and connected and section == "settings" else None}
+        <Modal visible={composerOpen and logged} transparent={True} animationType="fade"
+            onRequestClose={lambda { composerOpen = False; }}>
+            <View style={{"flex": 1, "justifyContent": "center", "alignItems": "center", "padding": 12, "backgroundColor": "#17213CCC"}}>
+                <View style={[T.card, {"width": "100%", "maxWidth": 520, "maxHeight": "96%", "padding": 18, "gap": 10}]}>
+                    <View style={T.between}>
+                        <Text style={T.heading}>{"Edit assignment" if editing else "Add assignment"}</Text>
+                        <Button dark={darkMode} label="Close" quiet={True} action={lambda { composerOpen = False; }}/>
+                    </View>
+                    {<Text accessibilityRole="alert" style={T.error}>{error}</Text> if error else None}
+                    {<View style={{"gap": 10}}>
+                        <Field dark={darkMode} label="What is due?" value={title} change={lambda (t: str) { title = t; }}/>
+                        <Field dark={darkMode} label="Course" value={course} change={lambda (t: str) { course = t; }}/>
+                        <TimePicker dark={darkMode} value={due} change={lambda (t: str) { due = t; }}/>
+                    </View> if not showDetails else None}
+                    {<View style={{"gap": 8}}>
+                        <Text style={T.small}>{title if title else "New assignment"}</Text>
+                        <Text style={T.name}>Priority</Text>
+                        <View style={T.row}>{[<Button dark={darkMode} key={p} label={p.title()} quiet={priority != p} action={lambda { priority = p; }}/> for p in ["low", "medium", "high"]]}</View>
+                        <Field dark={darkMode} label="Notes" value={notes} change={lambda (t: str) { notes = t; }} multiline={True}/>
+                    </View> if showDetails else None}
+                    <View style={T.between}>
+                        <Button dark={darkMode} label={"Back" if showDetails else "Priority & notes"} quiet={True} action={lambda { showDetails = not showDetails; }}/>
+                        <Button dark={darkMode} label={"Saving…" if busy else "Save changes" if editing else "Add assignment"}
+                            action={lambda { act("save"); }} disabled={busy or not title.strip()}/>
+                    </View>
+                </View>
+            </View>
+        </Modal>
+        <Modal visible={filtersOpen and logged} transparent={True} animationType="fade"
+            onRequestClose={lambda { filtersOpen = False; }}>
+            <View style={{"flex": 1, "justifyContent": "center", "alignItems": "center", "padding": 12, "backgroundColor": "#17213CCC"}}>
+                <View style={[T.card, {"width": "100%", "maxWidth": 560, "padding": 18, "gap": 12}]}>
+                    <View style={T.between}><Text style={T.heading}>Filters</Text><Button dark={darkMode} label="Done" action={lambda { filtersOpen = False; }}/></View>
+                    <Text style={T.name}>Course</Text>
+                    <ScrollView horizontal={True} showsHorizontalScrollIndicator={False} contentContainerStyle={{"gap": 6}}>
+                        <Button dark={darkMode} label="All courses" quiet={courseFilter != ""} action={lambda { courseFilter = ""; }}/>
+                        {[<Button dark={darkMode} key={c} label={c} quiet={courseFilter != c} action={lambda { courseFilter = c; }}/> for c in feed.courses]}
+                    </ScrollView>
+                    <Text style={T.name}>Priority</Text>
+                    <View style={T.row}>
+                        <Button dark={darkMode} label="Any" quiet={priorityFilter != ""} action={lambda { priorityFilter = ""; }}/>
+                        {[<Button dark={darkMode} key={p} label={p.title()} quiet={priorityFilter != p} action={lambda { priorityFilter = p; }}/> for p in ["low", "medium", "high"]]}
+                    </View>
+                    <Text style={T.name}>Status</Text>
+                    <View style={T.row}>{[<Button dark={darkMode} key={s} label={s.title()} quiet={status != s} action={lambda { status = s; }}/> for s in ["open", "completed", "all"]]}</View>
+                    {<Button dark={darkMode} label="Clear filters" quiet={True} action={lambda { courseFilter = ""; priorityFilter = ""; status = "open"; }}/> if activeFilters else None}
+                </View>
+            </View>
+        </Modal>
+        <Modal visible={bool(aiTask) and logged} transparent={True} animationType="fade"
+            onRequestClose={lambda { aiTask = ""; ai = Breakdown(); }}>
+            <View style={{"flex": 1, "justifyContent": "center", "alignItems": "center", "padding": 12, "backgroundColor": "#17213CCC"}}>
+                <View style={[T.card, {"width": "100%", "maxWidth": 520, "backgroundColor": P.pale, "borderColor": P.line}]}>
+                    <Text style={T.eyebrow}>✦ STUDY COACH</Text>
+                    <Text style={T.heading}>{aiTitle}</Text>
+                    <Text style={T.body}>{"Review these steps before adding them. They inherit the assignment’s deadline; edit dates to spread out your work." if ai.available else ai.message}</Text>
+                    {[<Text key={step} style={T.body}>• {step}</Text> for step in ai.steps]}
+                    {<Button dark={darkMode} label="Add these study steps" action={lambda { act("accept"); }} disabled={busy}/> if ai.available and ai.steps else None}
+                    <Button dark={darkMode} label="Dismiss" quiet={True} action={lambda { aiTask = ""; ai = Breakdown(); }}/>
+                </View>
+            </View>
+        </Modal>
+        <View style={T.footer}>
+            <Text style={T.small}>Daymark © 2026 · Make every day count.</Text>
         </View>
     </ScrollView>;
 }
