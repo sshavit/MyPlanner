@@ -2,6 +2,7 @@ import os;
 import from jaclang.byllm.lib { Model }
 glob llm = Model(model_name=os.environ.get("BYLLM_DEFAULT_MODEL", "gpt-4o-mini"));
 import datetime;
+import calendar;
 import from zoneinfo { ZoneInfo }
 import from jaclang.runtime.runtime { JacRuntime }
 
@@ -9,14 +10,15 @@ node Profile { has username: str; }
 
 obj TaskView {
     has id: str, title: str, course: str, due: str, priority: str, notes: str,
-        completed: bool = False;
+        completed: bool = False, series_id: str = "", repeat: str = "";
 }
 node Task {
     has title: str, course: str, due: str, priority: str, notes: str,
-        completed: bool = False;
+        completed: bool = False, series_id: str = "", repeat: str = "";
     def view -> TaskView {
         return TaskView(id=jid(self), title=self.title, course=self.course,
-            due=self.due, priority=self.priority, notes=self.notes, completed=self.completed);
+            due=self.due, priority=self.priority, notes=self.notes, completed=self.completed,
+            series_id=self.series_id, repeat=self.repeat);
     }
 }
 obj Planner {
@@ -64,8 +66,9 @@ def validate(title: str, course: str, due: str, priority: str, notes: str) -> No
         raise ValueError("Priority must be low, medium, or high.");
     }
     try {
-        parsed = datetime.datetime.strptime(due, "%Y-%m-%dT%H:%M");
-        if parsed.strftime("%Y-%m-%dT%H:%M") != due { raise ValueError("format"); }
+        normalized_due = due[:16] if len(due) == 19 and due[16:] in [":00", ":00Z"] else due;
+        parsed = datetime.datetime.strptime(normalized_due, "%Y-%m-%dT%H:%M");
+        if parsed.strftime("%Y-%m-%dT%H:%M") != normalized_due { raise ValueError("format"); }
     } except ValueError {
         raise ValueError("Use a valid due date and time: YYYY-MM-DDTHH:MM.");
     }
@@ -95,6 +98,57 @@ def:pub save_task(title: str, course: str, due: str, priority: str = "medium",
     return jid(task);
 }
 
+def:pub create_recurring(title: str, course: str, due: str, priority: str = "medium",
+    notes: str = "", repeat: str = "weekly", occurrences: int = 8) -> list[str] {
+    me();
+    validate(title, course, due, priority, notes);
+    if repeat not in ["daily", "weekly", "monthly"] {
+        raise ValueError("Repeat must be daily, weekly, or monthly.");
+    }
+    if occurrences < 2 or occurrences > 52 {
+        raise ValueError("Choose 2–52 occurrences.");
+    }
+    start = datetime.datetime.strptime(due, "%Y-%m-%dT%H:%M");
+    ids: list[str] = [];
+    series_id = "";
+    for index in range(occurrences) {
+        if repeat == "monthly" {
+            month_index = start.year * 12 + start.month - 1 + index;
+            year = month_index // 12;
+            month = month_index % 12 + 1;
+            day = min(start.day, calendar.monthrange(year, month)[1]);
+            occurrence = start.replace(year=year, month=month, day=day);
+        } else {
+            occurrence = start + datetime.timedelta(days=index * (7 if repeat == "weekly" else 1));
+        }
+        task = root ++> Task(title=title.strip(), course=course.strip(),
+            due=occurrence.strftime("%Y-%m-%dT%H:%M"), priority=priority,
+            notes=notes.strip(), series_id=series_id, repeat=repeat);
+        if not series_id {
+            series_id = jid(task);
+            task.series_id = series_id;
+        }
+        ids.append(jid(task));
+    }
+    return ids;
+}
+
+def:pub update_series(task_id: str, title: str, course: str, due: str,
+    priority: str = "medium", notes: str = "") -> int {
+    selected = owned(task_id);
+    if not selected.series_id { raise ValueError("This assignment is not recurring."); }
+    validate(title, course, due, priority, notes);
+    old_due = selected.due;
+    delta = datetime.datetime.strptime(due, "%Y-%m-%dT%H:%M") - datetime.datetime.strptime(old_due, "%Y-%m-%dT%H:%M");
+    future = [task for task in [root-->[?:Task]] if task.series_id == selected.series_id and task.due >= old_due];
+    for task in future {
+        task.title = title.strip(); task.course = course.strip();
+        task.due = (datetime.datetime.strptime(task.due, "%Y-%m-%dT%H:%M") + delta).strftime("%Y-%m-%dT%H:%M");
+        task.priority = priority; task.notes = notes.strip();
+    }
+    return len(future);
+}
+
 def:pub complete_task(task_id: str, completed: bool = True) -> bool {
     task = owned(task_id);
     task.completed = str(completed).lower() == "true";
@@ -105,6 +159,15 @@ def:pub delete_task(task_id: str) -> bool {
     task = owned(task_id);
     del task;
     return True;
+}
+
+def:pub delete_series(task_id: str) -> int {
+    selected = owned(task_id);
+    if not selected.series_id { raise ValueError("This assignment is not recurring."); }
+    future = [task for task in [root-->[?:Task]] if task.series_id == selected.series_id and task.due >= selected.due];
+    count = len(future);
+    for task in future { del task; }
+    return count;
 }
 
 def:pub load_planner(mode: str = "dashboard", day: str = "", course: str = "",

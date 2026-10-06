@@ -27,7 +27,7 @@ def buildStyles(c: Colors) -> any {
              "header": {"flexDirection": "row", "justifyContent": "space-between", "alignItems": "center", "gap": 16, "paddingVertical": 6},
              "brand": {"fontSize": 25, "fontWeight": "800", "color": c.ink, "letterSpacing": -1},
              "brandMark": {"width": 40, "height": 40, "borderRadius": 13, "backgroundColor": c.accent, "alignItems": "center", "justifyContent": "center"},
-             "brandMarkText": {"fontSize": 23, "fontWeight": "800", "color": "#FFFFFF"},
+             "brandMarkText": {"fontSize": 17, "fontWeight": "900", "letterSpacing": -2, "color": "#FFFFFF"},
              "hero": {"backgroundColor": c.navy, "borderRadius": 28, "padding": 32, "gap": 15, "overflow": "hidden"},
              "heroGlow": {"position": "absolute", "right": -70, "top": -110, "width": 350, "height": 350, "borderRadius": 175, "backgroundColor": "#343E88"},
              "heroGlowSmall": {"position": "absolute", "right": 135, "bottom": -120, "width": 240, "height": 240, "borderRadius": 120, "backgroundColor": "#35327A"},
